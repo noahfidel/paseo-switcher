@@ -21,6 +21,7 @@
   ],
   "files": [
     "paseo-plugin.json",
+    "assets/",
     "OVERVIEW.md",
     "index.client.tsx",
     "client/"
