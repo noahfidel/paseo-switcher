@@ -1,0 +1,45 @@
+{
+  "name": "paseo-switcher",
+  "type": "module",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Arc-style Ctrl+Tab workspace switcher for Paseo, with thumbnails of your most recent workspaces.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomgrin10/paseo-switcher.git"
+  },
+  "homepage": "https://github.com/tomgrin10/paseo-switcher#readme",
+  "bugs": "https://github.com/tomgrin10/paseo-switcher/issues",
+  "author": "Tom Gringauz",
+  "keywords": [
+    "paseo",
+    "paseo-plugin",
+    "workspaces",
+    "switcher",
+    "keyboard",
+    "ctrl-tab"
+  ],
+  "files": [
+    "paseo-plugin.json",
+    "OVERVIEW.md",
+    "index.client.tsx",
+    "client/"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "verify": "npm run typecheck && npm test",
+    "e2e": "node test/e2e/run.mjs",
+    "media": "node test/e2e/media.mjs"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.15.0",
+    "@tanstack/react-query": "^5.90.11",
+    "@types/react": "~19.2.0",
+    "playwright-core": "^1.58.2",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "zod": "^4.4.3"
+  }
+}
