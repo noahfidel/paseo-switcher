@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  ago,
   buildCards,
   clampLimit,
   DEFAULT_LIMIT,
   initialIndex,
+  parseLayout,
   previousKey,
   touch,
   wrap,
@@ -93,4 +95,20 @@ test("wrap cycles in both directions", () => {
   assert.equal(wrap(5, 5), 0);
   assert.equal(wrap(-1, 5), 4);
   assert.equal(wrap(3, 0), 0);
+});
+
+test("parseLayout accepts the strip and falls back to the list", () => {
+  assert.equal(parseLayout("strip"), "strip");
+  assert.equal(parseLayout("list"), "list");
+  assert.equal(parseLayout("grid"), "list");
+  assert.equal(parseLayout(null), "list");
+});
+
+test("ago gives compact ages", () => {
+  const now = Date.UTC(2026, 0, 2);
+  assert.equal(ago(0, now), null);
+  assert.equal(ago(now - 20_000, now), "now");
+  assert.equal(ago(now - 5 * 60_000, now), "5m");
+  assert.equal(ago(now - 3 * 3_600_000, now), "3h");
+  assert.equal(ago(now - 50 * 3_600_000, now), "2d");
 });

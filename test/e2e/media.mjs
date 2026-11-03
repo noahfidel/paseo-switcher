@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Captures the README screenshots and demo GIF of the real switcher, running against the local
-// daemon, with every workspace name and all conversation text swapped for sample text so nothing
-// private is published.
+// Records the README demo GIFs of the real switcher, one per layout, running against the local
+// daemon, with every workspace name, detail and all conversation text swapped for sample data so
+// nothing private is published.
 //
-//   npm run media    # writes docs/images/switcher-light.png, switcher-dark.png and switcher-demo.gif
+//   npm run media    # writes docs/images/switcher-list.gif and switcher-thumbnails.gif
 //
-// The GIF needs ffmpeg on PATH, or its path in FFMPEG. Without it, only the screenshots are written.
+// Needs ffmpeg on PATH, or its path in FFMPEG, to encode the GIFs.
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -18,11 +18,26 @@ import { authenticate, findWebUi, ORIGIN, serve } from "./browser.mjs";
 const OUT = resolve(dirname(fileURLToPath(import.meta.url)), "../../docs/images");
 
 const SAMPLES = [
-  { name: "Checkout redesign", project: "storefront", branch: "checkout-v2", additions: 412, deletions: 96, status: "running" },
-  { name: "Rate limit the public API", project: "api", branch: "rate-limits", additions: 158, deletions: 23, status: "waiting" },
-  { name: "Fix flaky login test", project: "storefront", branch: "fix-login-flake", additions: 12, deletions: 31, status: "done" },
-  { name: "Docs search", project: "docs", branch: "search", additions: 640, deletions: 118, status: "done" },
-  { name: "Upgrade to Postgres 17", project: "api", branch: "pg17", additions: 77, deletions: 54, status: "done" },
+  {
+    name: "Checkout redesign", project: "storefront", branch: "checkout-v2", additions: 412, deletions: 96,
+    status: "running", time: "for 3m", pr: { number: 482, state: "open", checks: "pending", review: null }, ahead: 0,
+  },
+  {
+    name: "Rate limit the public API", project: "api", branch: "rate-limits", additions: 158, deletions: 23,
+    status: "needs_input", time: "for 12m", pr: { number: 477, state: "open", checks: "success", review: "approved" }, ahead: 0,
+  },
+  {
+    name: "Fix the flaky login test on Safari", project: "storefront", branch: "fix-login-flake", additions: 12, deletions: 31,
+    status: "done", time: "2h ago", pr: { number: 470, state: "merged", checks: "success", review: null }, ahead: 0,
+  },
+  {
+    name: "Docs search", project: "docs", branch: "search-index", additions: 640, deletions: 118,
+    status: "done", time: "5h ago", pr: null, ahead: 2,
+  },
+  {
+    name: "Upgrade to Postgres 17", project: "api", branch: "pg17", additions: 77, deletions: 54,
+    status: "failed", time: "for 1d", pr: { number: 455, state: "draft", checks: "failure", review: null }, ahead: 0,
+  },
 ];
 
 /**
@@ -82,40 +97,81 @@ function scrub(samples) {
 }
 
 /**
- * Runs in the page. Keeps every card in the strip labeled with its sample, including cards the
- * plugin re-renders while the strip is open. It runs before the browser paints, after every change
- * to the strip. A card with no sample hides the strip and is recorded, so a capture never shows it.
+ * Runs in the page. Keeps every card and row in the switcher labeled with its sample, including
+ * ones the plugin re-renders while it is open. It runs before the browser paints, after every
+ * change to the switcher. A card with no sample hides the switcher and is recorded, so a capture
+ * never shows it. Labels mirror the plugin's own markup so the capture looks the same.
  */
 function labels(samples) {
   const byKey = new Map(samples.map((s) => [s.key, s]));
-  const span = (className, textContent) => Object.assign(document.createElement("span"), { className, textContent });
+  const make = (tag, className, textContent = "") => Object.assign(document.createElement(tag), { className, textContent });
   const host = document.querySelector(".pws-host");
-  window.__pwsUnlabeled = [];
-  const labeled = (card, s) =>
-    card.querySelector(".pws-name")?.textContent === s.name &&
-    card.querySelector(".pws-where")?.textContent === `${s.project} · ${s.branch}` &&
-    card.querySelector(".pws-diff")?.textContent === `+${s.additions}−${s.deletions}`;
-  const label = (card, s) => {
+  const hue = (text) => {
+    let h = 0;
+    for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 360;
+    return `hsl(${h} 45% 45%)`;
+  };
+  const diff = (s) => {
+    const span = make("span", "pws-diff");
+    span.append(make("span", "pws-add", `+${s.additions}`), make("span", "pws-del", `−${s.deletions}`));
+    return span;
+  };
+  const labelCard = (card, s) => {
     card.querySelector(".pws-name").textContent = s.name;
     card.querySelector(".pws-where").textContent = `${s.project} · ${s.branch}`;
     card.querySelector(".pws-dot")?.remove();
-    if (s.status !== "done") card.querySelector(".pws-title").prepend(span(`pws-dot pws-${s.status}`, ""));
+    if (s.status !== "done") card.querySelector(".pws-title").prepend(make("span", `pws-dot pws-${s.status}`));
     card.querySelector(".pws-diff")?.remove();
-    const diff = span("pws-diff", "");
-    diff.append(span("pws-add", `+${s.additions}`), span("pws-del", `−${s.deletions}`));
-    card.querySelector(".pws-meta").append(diff);
+    card.querySelector(".pws-meta").append(diff(s));
   };
+  const labelRow = (row, s) => {
+    const badge = row.querySelector(".pws-badge");
+    badge.textContent = s.project[0].toUpperCase();
+    badge.style.background = hue(s.project);
+    const meta = make("div", "pws-meta");
+    const part = (className, text) => meta.appendChild(make("span", `pws-part ${className}`, text));
+    part("", s.project);
+    if (s.branch !== s.name) part("pws-branch", s.branch);
+    if (s.pr) {
+      const state = s.pr.state === "open" ? "" : ` ${s.pr.state[0].toUpperCase()}${s.pr.state.slice(1)}`;
+      const chip = part(`pws-pr pws-pr-${s.pr.state}`, `#${s.pr.number}${state}`);
+      if (s.pr.state === "open" || s.pr.state === "draft") {
+        const mark = { success: "✓", failure: "✕", pending: "●" }[s.pr.checks];
+        if (mark) chip.appendChild(make("span", `pws-checks pws-checks-${s.pr.checks}`, ` ${mark}`));
+        if (s.pr.review === "approved") part("pws-approved", "Approved");
+      }
+    }
+    const d = diff(s);
+    d.classList.add("pws-part");
+    meta.appendChild(d);
+    if (s.ahead) part("", `↑${s.ahead}`);
+    row.querySelector(".pws-main").replaceChildren(make("div", "pws-name", s.name), meta);
+    const side = [];
+    if (s.status !== "done") {
+      const label = { running: "Running", needs_input: "Needs input", attention: "Needs attention", failed: "Failed" }[s.status];
+      const status = make("div", `pws-status pws-status-${s.status}`);
+      status.append(make("span", `pws-dot pws-${s.status}`), make("span", "", label));
+      side.push(status);
+    }
+    side.push(make("div", "pws-time", s.time));
+    row.querySelector(".pws-side").replaceChildren(...side);
+  };
+  window.__pwsUnlabeled = [];
   new MutationObserver(() => {
     for (const card of host.querySelectorAll(".pws-card")) {
       const s = byKey.get(card.dataset.key);
       if (!s) {
         card.closest(".pws-root").style.visibility = "hidden";
         window.__pwsUnlabeled.push(card.dataset.key);
-      } else if (!labeled(card, s)) {
-        label(card, s);
+      } else if (card.dataset.sample !== card.textContent) {
+        if (card.classList.contains("pws-row")) labelRow(card, s);
+        else labelCard(card, s);
+        card.setAttribute("aria-label", s.name);
+        // Any later change by the plugin no longer matches this text and is relabeled.
+        card.dataset.sample = card.textContent;
       }
     }
-  }).observe(host, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["aria-label"] });
+  }).observe(host, { subtree: true, childList: true, characterData: true });
 }
 
 /** Never publish a capture that could show a real workspace. */
@@ -123,7 +179,9 @@ async function assertLabeled(page, samples) {
   const problem = await page.evaluate((names) => {
     if (window.__pwsUnlabeled.length) return `${window.__pwsUnlabeled.length} card(s) had no sample`;
     const shown = [...document.querySelectorAll(".pws-name")].map((n) => n.textContent);
-    return shown.find((name) => !names.includes(name)) ? "a card shows a name that is not a sample" : null;
+    if (shown.find((name) => !names.includes(name))) return "a card shows a name that is not a sample";
+    const cards = [...document.querySelectorAll(".pws-card")];
+    return cards.some((c) => c.dataset.sample !== c.textContent) ? "a card has text that is not from its sample" : null;
   }, samples.map((s) => s.name));
   if (problem) throw new Error(`Refusing to write the capture: ${problem}`);
 }
@@ -147,9 +205,14 @@ function keycaps() {
     );
 }
 
-async function prepare(browser, scheme) {
+async function prepare(browser, scheme, layout) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
   await authenticate(context);
+  await context.addInitScript((layout) => {
+    try {
+      localStorage.setItem("paseo-switcher:layout", JSON.stringify(layout));
+    } catch {}
+  }, layout);
   const page = await context.newPage();
   await page.goto(`${ORIGIN}/`);
   await page.waitForSelector(".pws-host", { state: "attached", timeout: 30000 });
@@ -171,6 +234,10 @@ async function prepare(browser, scheme) {
     const [, workspace] = key.split(/:(?=[^:]*$)/);
     await page.locator(`[data-testid="sidebar-workspace-row-${key}"]`).click({ force: true });
     await page.waitForURL((url) => url.pathname.endsWith(`/workspace/${encodeURIComponent(workspace)}`), { timeout: 10000 });
+    if (layout === "list") {
+      await page.waitForTimeout(800);
+      continue;
+    }
     // A thumbnail is taken once the app is idle, after a quiet period following the switch.
     await page
       .waitForFunction((n) => performance.getEntriesByName("pws:draw").length > n, before, { timeout: 20000 })
@@ -179,21 +246,8 @@ async function prepare(browser, scheme) {
   return { context, page, samples };
 }
 
-async function still(page, scheme, samples) {
-  await page.keyboard.down("Control");
-  await page.keyboard.press("Tab");
-  await page.waitForSelector(".pws-root", { timeout: 2000 });
-  await page.waitForTimeout(300);
-  await assertLabeled(page, samples);
-  const file = join(OUT, `switcher-${scheme}.png`);
-  await page.screenshot({ path: file });
-  await page.keyboard.press("Escape");
-  await page.keyboard.up("Control");
-  console.log(`Wrote ${file}`);
-}
-
 /** Records hold-to-browse, release-to-switch, and a quick tap back, then encodes a GIF. */
-async function demo(context, page, samples, ffmpeg) {
+async function demo(context, page, samples, ffmpeg, file) {
   await page.evaluate(keycaps);
   // Park the mouse away from the sidebar and the strip so no tooltip or hover shows.
   await page.mouse.move(1100, 110);
@@ -244,7 +298,6 @@ async function demo(context, page, samples, ffmpeg) {
 
   const list = frames.map((f, i) => `file '${f.file}'\nduration ${((frames[i + 1]?.at ?? f.at + 1) - f.at).toFixed(3)}`);
   writeFileSync(join(dir, "frames.txt"), `${list.join("\n")}\nfile '${frames.at(-1).file}'\n`);
-  const file = join(OUT, "switcher-demo.gif");
   const filters = "fps=15,scale=1200:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle";
   const result = spawnSync(ffmpeg, ["-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", join(dir, "frames.txt"), "-vf", filters, "-loop", "0", file], { stdio: "inherit" });
   rmSync(dir, { recursive: true, force: true });
@@ -253,16 +306,16 @@ async function demo(context, page, samples, ffmpeg) {
 }
 
 const ffmpeg = process.env.FFMPEG ?? "ffmpeg";
-const hasFfmpeg = spawnSync(ffmpeg, ["-version"], { stdio: "ignore" }).status === 0;
-if (!hasFfmpeg) console.warn("ffmpeg not found; skipping the GIF. Set FFMPEG to its path to record it.");
+if (spawnSync(ffmpeg, ["-version"], { stdio: "ignore" }).status !== 0) {
+  throw new Error("ffmpeg not found. Install it, or set FFMPEG to its path.");
+}
 mkdirSync(OUT, { recursive: true });
 const server = await serve(findWebUi());
 const browser = await chromium.launch();
 try {
-  for (const scheme of ["light", "dark"]) {
-    const { context, page, samples } = await prepare(browser, scheme);
-    await still(page, scheme, samples);
-    if (scheme === "dark" && hasFfmpeg) await demo(context, page, samples, ffmpeg);
+  for (const [layout, name] of [["list", "switcher-list.gif"], ["strip", "switcher-thumbnails.gif"]]) {
+    const { context, page, samples } = await prepare(browser, "dark", layout);
+    await demo(context, page, samples, ffmpeg, join(OUT, name));
     await context.close();
   }
 } finally {

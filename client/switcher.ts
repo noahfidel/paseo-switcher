@@ -1,15 +1,19 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import {
+  ago,
   buildCards,
   clampLimit,
+  DEFAULT_LAYOUT,
   DEFAULT_LIMIT,
   initialIndex,
+  parseLayout,
   previousKey,
   splitKey,
   touch,
   workspaceKey,
   wrap,
   type Card,
+  type Layout,
   type WorkspaceInfo,
 } from "./model";
 
@@ -26,6 +30,7 @@ const paneSelector = (key: string) => `[data-testid="workspace-deck-entry-${key}
 
 const MRU_KEY = "paseo-switcher:mru";
 const LIMIT_KEY = "paseo-switcher:limit";
+const LAYOUT_KEY = "paseo-switcher:layout";
 /** A tap shorter than this switches without ever drawing the strip. */
 const SHOW_DELAY_MS = 110;
 const POLL_ROUTE_MS = 300;
@@ -42,6 +47,8 @@ const MAX_THUMBS = 12;
 const CARD_MAX = 240;
 const CARD_MIN = 176;
 const ASPECT = 0.66;
+/** Estimated list row height, so the list knows it overflows without measuring. */
+const ROW_H = 64;
 /** Thumbnails zoom past the pane's side margins toward the conversation column. */
 const ZOOM = 1.35;
 const BLANK_IMAGE = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -66,13 +73,22 @@ export interface Switcher {
   open(): void;
   getLimit(): number;
   setLimit(limit: number): void;
+  getLayout(): Layout;
+  setLayout(layout: Layout): void;
   dispose(): void;
 }
 
 export function installSwitcher(paseo: Paseo): Switcher {
   const doc = g.document;
   const win = g.window;
-  const noop: Switcher = { open() {}, getLimit: () => DEFAULT_LIMIT, setLimit() {}, dispose() {} };
+  const noop: Switcher = {
+    open() {},
+    getLimit: () => DEFAULT_LIMIT,
+    setLimit() {},
+    getLayout: () => DEFAULT_LAYOUT,
+    setLayout() {},
+    dispose() {},
+  };
   if (!doc || !win) return noop;
 
   // Each connected host installs the plugin; only one switcher may own the keyboard.
@@ -80,6 +96,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   let mru: string[] = readJson(MRU_KEY, []).filter((v: unknown) => typeof v === "string");
   let limit = clampLimit(readJson(LIMIT_KEY, DEFAULT_LIMIT));
+  /** The list layout has no thumbnails, so it skips all background snapshot work. */
+  let layout = parseLayout(readJson(LAYOUT_KEY, DEFAULT_LAYOUT));
   let workspaces: Map<string, WorkspaceInfo> | null = null;
   let workspacesAt = 0;
   /** Rasterized thumbnails by workspace key, oldest first. Each canvas records its theme. */
@@ -160,6 +178,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
         const next = new Map<string, WorkspaceInfo>();
         for (const w of result.entries) {
           if (w.archivingAt || w.background) continue;
+          const pr = w.githubRuntime?.pullRequest;
           next.set(w.id, {
             id: w.id,
             name: w.name,
@@ -168,7 +187,18 @@ export function installSwitcher(paseo: Paseo): Switcher {
             status: w.status,
             additions: w.diffStat?.additions ?? 0,
             deletions: w.diffStat?.deletions ?? 0,
-            activityAt: w.activityAt ? Date.parse(w.activityAt) : 0,
+            // Idle workspaces may have no activity time; fall back to the latest one the daemon has.
+            activityAt: latest(w.activityAt, w.lastUserMessageAt, w.statusEnteredAt, w.createdAt),
+            statusAt: latest(w.statusEnteredAt),
+            ahead: w.gitRuntime?.aheadOfOrigin ?? 0,
+            pr: pr
+              ? {
+                  number: pr.number ?? null,
+                  state: pr.isMerged ? "merged" : pr.isDraft ? "draft" : pr.state.toLowerCase() === "open" ? "open" : "closed",
+                  checks: pr.checksStatus ?? "none",
+                  review: pr.reviewDecision ?? null,
+                }
+              : null,
           });
         }
         workspaces = next;
@@ -555,25 +585,34 @@ export function installSwitcher(paseo: Paseo): Switcher {
     }
     const surface = surfaceOf(currentPane() ?? doc.body);
     dark = isDark(surface);
+    const list = layout === "list";
     root.classList.toggle("pws-dark", dark);
+    root.classList.toggle("pws-list", list);
     root.style.setProperty("--pws-surface", surface);
-    // Fit every card in the window when possible, within readable thumbnail sizes.
-    const fit = Math.floor((win.innerWidth - 96 - 20 - (cards.length - 1) * 6) / Math.max(cards.length, 1)) - 16;
-    const cardW = Math.max(CARD_MIN, Math.min(CARD_MAX, fit));
-    // Card width + padding + gap, plus panel padding, against the panel's max width.
-    overflowing = cards.length * (cardW + 16 + 6) + 14 > win.innerWidth - 96;
-    root.style.setProperty("--pws-w", `${cardW}px`);
-    root.style.setProperty("--pws-h", `${Math.round(cardW * ASPECT)}px`);
+    if (list) {
+      // Rows plus panel padding, against the panel's max height (the window less 140px).
+      overflowing = cards.length * ROW_H + 12 > win.innerHeight - 140;
+    } else {
+      // Fit every card in the window when possible, within readable thumbnail sizes.
+      const fit = Math.floor((win.innerWidth - 96 - 20 - (cards.length - 1) * 6) / Math.max(cards.length, 1)) - 16;
+      const cardW = Math.max(CARD_MIN, Math.min(CARD_MAX, fit));
+      // Card width + padding + gap, plus panel padding, against the panel's max width.
+      overflowing = cards.length * (cardW + 16 + 6) + 14 > win.innerWidth - 96;
+      root.style.setProperty("--pws-w", `${cardW}px`);
+      root.style.setProperty("--pws-h", `${Math.round(cardW * ASPECT)}px`);
+    }
 
     const panel = el("div", "pws-panel");
     panel.setAttribute("role", "listbox");
     panel.setAttribute("aria-label", "Switch workspace");
     if (!cards.length) panel.appendChild(el("div", "pws-empty-panel", "No workspaces yet"));
-    cards.forEach((card, i) => panel.appendChild(renderCard(card, i)));
+    const at = Date.now();
+    cards.forEach((card, i) => panel.appendChild(list ? renderRow(card, i, at) : renderCard(card, i)));
+    const arrows = list ? "↑ ↓" : "← →";
     const hint = el(
       "div",
       "pws-hint",
-      mode === "hold" ? "Release Ctrl to switch  ·  Shift+Tab back  ·  Esc cancel" : "Enter to switch  ·  ← → move  ·  Esc cancel",
+      mode === "hold" ? "Release Ctrl to switch  ·  Shift+Tab back  ·  Esc cancel" : `Enter to switch  ·  ${arrows} move  ·  Esc cancel`,
     );
     root.replaceChildren(panel, hint);
     if (fresh) host.appendChild(root);
@@ -619,6 +658,81 @@ export function installSwitcher(paseo: Paseo): Switcher {
     return node;
   }
 
+  /** A list row: the full name, where it lives, its pull request, and what its agent is doing. */
+  function renderRow(card: Card, i: number, at: number): Node {
+    const info = card.info;
+    const name = info?.name ?? rowLabel(card.key) ?? "Workspace";
+    const node = el("div", "pws-card pws-row");
+    node.setAttribute("role", "option");
+    node.setAttribute("data-key", card.key);
+    node.setAttribute("aria-label", name);
+    node.addEventListener("mousemove", () => {
+      if (index !== i) {
+        index = i;
+        select();
+      }
+    });
+    node.addEventListener("click", () => commit(i));
+
+    node.appendChild(el("div", "pws-number", i < 9 ? String(i + 1) : ""));
+    const project = info?.project ?? null;
+    const badge = el("div", "pws-badge", (project ?? "?").slice(0, 1).toUpperCase());
+    badge.style.background = hue(project ?? card.key);
+    node.appendChild(badge);
+
+    const main = el("div", "pws-main");
+    main.appendChild(el("div", "pws-name", name));
+    const meta = el("div", "pws-meta");
+    const part = (className: string, text: string, title?: string) => {
+      const span = el("span", className, text);
+      if (title) span.title = title;
+      meta.appendChild(span);
+      return span;
+    };
+    if (project) part("pws-part", project);
+    // The name is often the branch; only show the branch when it adds something.
+    if (info?.branch && info.branch !== name) part("pws-part pws-branch", info.branch);
+    const pr = info?.pr;
+    if (pr) {
+      const label = pr.number ? `#${pr.number}` : "PR";
+      const state = pr.state === "open" ? "" : ` ${pr.state[0].toUpperCase()}${pr.state.slice(1)}`;
+      const chip = part(`pws-part pws-pr pws-pr-${pr.state}`, `${label}${state}`, "Pull request");
+      if (pr.state === "open" || pr.state === "draft") {
+        if (pr.checks !== "none") {
+          const checks = { success: "✓", failure: "✕", pending: "●" }[pr.checks];
+          chip.appendChild(el("span", `pws-checks pws-checks-${pr.checks}`, ` ${checks}`));
+        }
+        if (pr.review === "approved") part("pws-part pws-approved", "Approved");
+        else if (pr.review === "changes_requested") part("pws-part pws-changes", "Changes requested");
+      }
+    }
+    if (info && (info.additions || info.deletions)) {
+      const diff = el("span", "pws-part pws-diff");
+      diff.appendChild(el("span", "pws-add", `+${info.additions}`));
+      diff.appendChild(el("span", "pws-del", `−${info.deletions}`));
+      meta.appendChild(diff);
+    }
+    if (info?.ahead) part("pws-part", `↑${info.ahead}`, `${info.ahead} commit(s) not pushed`);
+    if (meta.childNodes.length) main.appendChild(meta);
+    node.appendChild(main);
+
+    const side = el("div", "pws-side");
+    if (info && info.status !== "done") {
+      const label = { running: "Running", needs_input: "Needs input", attention: "Needs attention", failed: "Failed" }[info.status];
+      const status = el("div", `pws-status pws-status-${info.status}`);
+      status.appendChild(el("span", `pws-dot pws-${info.status}`));
+      status.appendChild(el("span", "", label));
+      side.appendChild(status);
+      const since = ago(info.statusAt || info.activityAt, at);
+      if (since) side.appendChild(el("div", "pws-time", since === "now" ? "just now" : `for ${since}`));
+    } else {
+      const since = ago(info?.activityAt, at);
+      if (since) side.appendChild(el("div", "pws-time", since === "now" ? "just now" : `${since} ago`));
+    }
+    node.appendChild(side);
+    return node;
+  }
+
   function placeholder(project: string | null, key: string): Node {
     const box = el("div", "pws-placeholder");
     const initial = el("div", "pws-initial", (project ?? "?").slice(0, 1).toUpperCase());
@@ -644,7 +758,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
       nodes[i].classList.toggle("pws-selected", i === index);
       nodes[i].setAttribute("aria-selected", String(i === index));
     }
-    // Scrolling forces a layout; only an overflowing strip (narrow windows, many cards) needs it.
+    // Scrolling forces a layout; only an overflowing panel (small windows, many cards) needs it.
     if (overflowing) nodes[index]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }
 
@@ -713,7 +827,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   // right after a frame paints so measuring the pane never forces Paseo's pending layout early.
   const refreshTimer = setInterval(() => {
     if (currentPane() !== watched) watchPane();
-    if (dirty && !doc.hidden && Date.now() >= quietUntil) {
+    if (layout === "strip" && dirty && !doc.hidden && Date.now() >= quietUntil) {
       whenIdle(() => win.requestAnimationFrame(() => setTimeout(snapshotIfDirty, 0)));
     }
   }, REFRESH_MS);
@@ -726,6 +840,11 @@ export function installSwitcher(paseo: Paseo): Switcher {
     setLimit(next) {
       limit = clampLimit(next);
       writeJson(LIMIT_KEY, limit);
+    },
+    getLayout: () => layout,
+    setLayout(next) {
+      layout = parseLayout(next);
+      writeJson(LAYOUT_KEY, layout);
     },
     dispose() {
       close();
@@ -759,6 +878,15 @@ function measure(name: string, start: number) {
   } catch {
     // Older runtimes without the options form simply skip the entry.
   }
+}
+
+function latest(...times: Array<string | null | undefined>): number {
+  let best = 0;
+  for (const time of times) {
+    const at = time ? Date.parse(time) : 0;
+    if (at > best) best = at;
+  }
+  return best;
 }
 
 function hue(text: string): string {
@@ -847,6 +975,49 @@ const CSS = `
   background: var(--pws-panel); border: 1px solid var(--pws-border);
 }
 .pws-empty-panel { color: var(--pws-muted); font-size: 13px; padding: 28px 40px; }
+.pws-list .pws-panel {
+  flex-direction: column; gap: 2px; padding: 6px; width: min(680px, calc(100vw - 32px)); max-width: none;
+  max-height: calc(100vh - 140px); overflow-x: hidden; overflow-y: auto; border-radius: 18px;
+}
+.pws-row {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: start; column-gap: 12px;
+  width: auto; padding: 10px 12px; border-radius: 12px;
+}
+.pws-list .pws-number { position: static; margin-top: 1px; }
+.pws-badge {
+  width: 22px; height: 22px; border-radius: 7px; color: #fff; font-size: 12px; font-weight: 650;
+  display: flex; align-items: center; justify-content: center;
+}
+.pws-main { min-width: 0; }
+.pws-list .pws-name {
+  display: block; font-size: 14px; line-height: 20px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+}
+.pws-list .pws-meta { flex-wrap: wrap; gap: 2px 12px; margin: 3px 0 0; color: var(--pws-muted); line-height: 17px; }
+.pws-part { white-space: nowrap; }
+.pws-branch { white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+.pws-pr { color: var(--pws-fg); }
+.pws-pr-merged { color: #7c3aed; }
+.pws-pr-closed { color: var(--pws-muted); }
+.pws-dark .pws-pr-merged { color: #a78bfa; }
+.pws-checks-success, .pws-approved { color: #16a34a; }
+.pws-checks-failure, .pws-changes { color: #dc2626; }
+.pws-checks-pending { color: #d97706; font-size: 9px; vertical-align: 1px; }
+.pws-dark .pws-checks-success, .pws-dark .pws-approved { color: #4ade80; }
+.pws-dark .pws-checks-failure, .pws-dark .pws-changes { color: #f87171; }
+.pws-dark .pws-checks-pending { color: #fbbf24; }
+.pws-list .pws-diff { display: inline-flex; }
+.pws-side { text-align: right; font-size: 12px; line-height: 20px; white-space: nowrap; }
+.pws-status { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-weight: 550; color: var(--pws-fg); }
+.pws-status-needs_input, .pws-status-attention { color: #b45309; }
+.pws-status-failed { color: #dc2626; }
+.pws-dark .pws-status-needs_input, .pws-dark .pws-status-attention { color: #fbbf24; }
+.pws-dark .pws-status-failed { color: #f87171; }
+.pws-time { color: var(--pws-muted); font-variant-numeric: tabular-nums; line-height: 17px; margin-top: 3px; }
+.pws-status + .pws-time { margin-top: 0; }
+@media (max-width: 520px) {
+  .pws-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .pws-badge { display: none; }
+}
 @keyframes pws-fade { from { opacity: 0; } }
 @keyframes pws-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) {

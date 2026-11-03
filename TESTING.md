@@ -56,6 +56,18 @@ The run takes about four minutes. It prints a PASS/FAIL line per check, writes `
 
 **Settings (S):** the limit defaults to 5, the settings screen saves a new value, the strip honors it, and it survives a reload.
 
+**List layout (L)**
+
+| ID | Check |
+| --- | --- |
+| L1, L2 | The settings screen shows Layout, default List, and choosing Thumbnails, then List, saves each |
+| L3 | The list shows the 5 most recent workspaces as rows, previous one selected, no thumbnails |
+| L4 | No workspace name is cut off at 900px or 440px, and the list stays inside the window |
+| L5 | Holding Ctrl, two Tabs and release switches to the third most recent |
+| L6 | Opening the list takes under 30 ms with under 200 elements; moving takes under 5 ms |
+| L7 | In the list layout, no thumbnail snapshots run in the background |
+| L8 | Screenshots: `list-light.png`, `list-dark.png`, `list-900.png`, `list-440.png` |
+
 **Visual (V):** the strip fits a 900px window. Screenshots in light, dark, narrow, and limit-3 layouts land in `test/artifacts/` for a human look.
 
 **Performance (P).** Thresholds are set for a slow cloud VM; a laptop is usually several times faster.
@@ -87,4 +99,4 @@ P10 and P11 read the `pws:snapshot`, `pws:serialize` (with its `pws:xml` and `pw
 
 ## README media
 
-`npm run media` captures `docs/images/switcher-light.png`, `switcher-dark.png` and `switcher-demo.gif` from the real plugin, with the same setup as the end-to-end suite. It replaces every workspace name and all conversation text with sample text before anything is drawn, and refuses to write a capture if a card in the strip has no sample label. The GIF needs ffmpeg on `PATH`, or its path in `FFMPEG`.
+`npm run media` records `docs/images/switcher-list.gif` and `switcher-thumbnails.gif` from the real plugin, with the same setup as the end-to-end suite. It replaces every workspace name, detail and all conversation text with sample data before anything is drawn, and refuses to write a GIF if any card or row shows text that is not from its sample. It needs ffmpeg on `PATH`, or its path in `FFMPEG`.

@@ -238,7 +238,7 @@ async function commandCenterAndMouse(page) {
 }
 
 async function composer(page) {
-  const box = page.locator('textarea[placeholder^="Message the agent"]').first();
+  const box = page.locator('textarea[placeholder^="Message the agent"]:visible').first();
   if (!(await box.count())) return info("B22", "Ctrl+Tab from the composer", "skipped: no composer in this workspace");
   await box.click();
   await page.evaluate(() => {
@@ -298,6 +298,139 @@ async function settings(page) {
   await page.keyboard.press("Escape");
   await page.keyboard.up("Control");
   check("S4", "Restoring 5 shows 5 cards", s.cards.length === 5, s.cards.length);
+}
+
+/** The list layout: full names and details instead of thumbnails, and no background snapshots. */
+async function listLayout(page) {
+  await page.evaluate(() => localStorage.removeItem("paseo-switcher:layout"));
+  await boot(page);
+  await page.keyboard.press("Control+k");
+  await page.waitForTimeout(700);
+  await page.keyboard.type("Workspace Switcher: settings");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1500);
+  const picker = page.locator('[aria-label^="Layout:"]').first();
+  const label = await picker.getAttribute("aria-label").catch(() => null);
+  check("L1", "Settings screen shows the layout, default List", label === "Layout: List", label);
+  const choose = async (option) => {
+    await page.locator('[aria-label^="Layout:"]').first().click();
+    await page.waitForTimeout(500);
+    await page.locator('[role="menuitem"]', { hasText: new RegExp(`^${option}$`) }).first().click();
+    await page.waitForTimeout(500);
+    return page.evaluate(() => localStorage.getItem("paseo-switcher:layout"));
+  };
+  const thumbnails = await choose("Thumbnails");
+  const list = await choose("List");
+  check("L2", "Choosing Thumbnails, then List, saves each", thumbnails === '"strip"' && list === '"list"', { thumbnails, list });
+
+  await boot(page);
+  await holdOpen(page);
+  const s = await strip(page);
+  const rowsShown = await page.locator(".pws-row").count();
+  const recent = (await mru(page)).slice(0, 5);
+  check(
+    "L3",
+    "The list shows the 5 most recent workspaces as rows, previous one selected, no thumbnails",
+    rowsShown === 5 && s.canvases === 0 && s.selected === 1 && JSON.stringify(s.cards) === JSON.stringify(recent),
+    { rowsShown, canvases: s.canvases, selected: s.selected },
+  );
+  await page.screenshot({ path: join(ARTIFACTS, "list-light.png") });
+  await page.keyboard.press("Escape");
+  await page.keyboard.up("Control");
+
+  const fits = async (width, height) => {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(500);
+    await holdOpen(page);
+    const r = await page.evaluate(() => {
+      const names = [...document.querySelectorAll(".pws-row .pws-name")];
+      const panel = document.querySelector(".pws-panel");
+      const box = panel.getBoundingClientRect();
+      return {
+        names: names.length,
+        clipped: names.filter((n) => n.scrollWidth > n.clientWidth + 1 || getComputedStyle(n).textOverflow === "ellipsis").length,
+        inside: box.left >= 0 && box.right <= innerWidth,
+        sideScroll: panel.scrollWidth > panel.clientWidth,
+      };
+    });
+    await page.screenshot({ path: join(ARTIFACTS, `list-${width}.png`) });
+    await page.keyboard.press("Escape");
+    await page.keyboard.up("Control");
+    return r;
+  };
+  const wide = await fits(900, 700);
+  const narrow = await fits(440, 720);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(500);
+  check(
+    "L4",
+    "Full workspace names: none cut off at 900px or 440px, and the list stays inside the window",
+    [wide, narrow].every((r) => r.names > 0 && r.clipped === 0 && r.inside && !r.sideScroll),
+    { wide, narrow },
+  );
+
+  const before = await mru(page);
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(SHOW_DELAY_MS + 250);
+  await page.keyboard.up("Control");
+  await page.waitForTimeout(1500);
+  check("L5", "Holding Ctrl, two Tabs and release switches to the third most recent", (await cur(page)) === before[2], {
+    expected: before[2],
+    got: await cur(page),
+  });
+
+  const opens = [];
+  for (let i = 0; i < 6; i++) {
+    opens.push(
+      await page.evaluate(async () => {
+        const t0 = performance.now();
+        window.__paseoSwitcher.open();
+        await new Promise((r) => setTimeout(r, 0));
+        const render = performance.now() - t0;
+        const nodes = document.querySelector(".pws-root").querySelectorAll("*").length;
+        const moves = [];
+        for (let k = 0; k < 10; k++) {
+          const t = performance.now();
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+          moves.push(performance.now() - t);
+        }
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        return { render, nodes, move: Math.max(...moves) };
+      }),
+    );
+    await page.waitForTimeout(300);
+  }
+  const render = median(opens.map((o) => o.render));
+  const move = Math.max(...opens.map((o) => o.move));
+  check("L6", "List: opening under 30 ms, under 200 elements, moving under 5 ms", render < 30 && opens[0].nodes < 200 && move < 5, {
+    renderMs: +render.toFixed(1),
+    nodes: opens[0].nodes,
+    worstMoveMs: +move.toFixed(2),
+  });
+
+  // In the strip layout, a switch is followed by a snapshot within a few seconds.
+  const snapshots = () => page.evaluate(() => performance.getEntriesByName("pws:snapshot").length);
+  const n0 = await snapshots();
+  await clickRow(page, (await mru(page))[3]);
+  await page.waitForTimeout(8000);
+  const n1 = await snapshots();
+  check("L7", "List: no thumbnail work in the background", n1 === n0, { snapshotsDuring8s: n1 - n0 });
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.waitForTimeout(800);
+  await holdOpen(page);
+  await page.screenshot({ path: join(ARTIFACTS, "list-dark.png") });
+  await page.keyboard.press("Escape");
+  await page.keyboard.up("Control");
+  await page.emulateMedia({ colorScheme: "light" });
+  info("L8", "List screenshots for review", ["list-light.png", "list-dark.png", "list-900.png", "list-440.png"].map((f) => `test/artifacts/${f}`));
+
+  await page.evaluate(() => localStorage.setItem("paseo-switcher:layout", '"strip"'));
+  await boot(page);
 }
 
 async function visuals(page) {
@@ -504,6 +637,8 @@ async function main() {
     await page.evaluate(() => {
       localStorage.removeItem("paseo-switcher:mru");
       localStorage.removeItem("paseo-switcher:limit");
+      // Most suites cover the thumbnail strip; the list suite checks the default itself.
+      localStorage.setItem("paseo-switcher:layout", '"strip"');
     });
     await boot(page);
     const all = await rows(page);
@@ -517,6 +652,7 @@ async function main() {
     await composer(page);
     await collapsedSidebar(page);
     await settings(page);
+    await listLayout(page);
     await visuals(page);
     await perf(page, context);
     if (ARGS.has("--reload")) await reloadCleanup(page);

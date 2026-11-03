@@ -9,6 +9,36 @@ export interface WorkspaceInfo {
   additions: number;
   deletions: number;
   activityAt: number;
+  /** When the workspace entered its current status, for "Running · 4m". */
+  statusAt?: number;
+  pr?: PullRequestInfo | null;
+  /** Commits not yet pushed to origin. */
+  ahead?: number;
+}
+
+export interface PullRequestInfo {
+  number: number | null;
+  state: "open" | "draft" | "merged" | "closed";
+  checks: "none" | "pending" | "success" | "failure";
+  review: "approved" | "changes_requested" | "pending" | null;
+}
+
+export type Layout = "strip" | "list";
+export const DEFAULT_LAYOUT: Layout = "list";
+
+export function parseLayout(value: unknown): Layout {
+  return value === "strip" ? "strip" : DEFAULT_LAYOUT;
+}
+
+/** Compact age: "now", "4m", "3h", "2d". */
+export function ago(at: number | undefined, now: number): string | null {
+  if (!at) return null;
+  const minutes = Math.floor((now - at) / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 export interface Card {
