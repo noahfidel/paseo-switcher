@@ -1,7 +1,7 @@
 {
   "name": "paseo-switcher",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Arc-style Ctrl+Tab workspace switcher for Paseo, with thumbnails of your most recent workspaces.",
   "repository": {
