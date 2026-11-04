@@ -38,6 +38,8 @@ paseo plugin install paseo-switcher
 
 Hovering a card selects it and clicking switches to it. The Command Center has **Switch workspace (Ctrl+Tab)** for browser tabs, where the browser keeps Ctrl+Tab for itself.
 
+The switcher owns Ctrl+Tab and Ctrl+Shift+Tab. A Paseo shortcut bound to either one, such as Next tab, does not fire while the plugin is installed.
+
 **Settings → Plugins → Workspace Switcher** sets the **Layout**, **List** (default) or **Thumbnails**, and how many recent workspaces appear, from 2 to 9 (default 5). Settings and the visit order are saved per device.
 
 A list row shows the full workspace name, project, branch (when it differs from the name), pull request number with draft, merged or closed state, checks and review, diff stat, unpushed commits, and the agent's status and how long it has been in it. A thumbnail card shows a preview, the name, project, branch, diff stat, and a status dot.

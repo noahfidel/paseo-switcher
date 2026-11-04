@@ -89,7 +89,16 @@ The run takes about four minutes. It prints a PASS/FAIL line per check, writes `
 
 P10 and P11 read the `pws:snapshot`, `pws:serialize` (with its `pws:xml` and `pws:css` parts) and `pws:draw` User Timing entries the plugin records. Any browser profiler shows the same entries.
 
-**Lifecycle (R, E):** after a plugin reload there is exactly one switcher (`--reload` only), and the plugin raised no page errors.
+**Paseo shortcuts (K).** The suite binds Paseo's Next tab and Previous tab to Ctrl+Tab and Ctrl+Shift+Tab, as a user can in Settings → Keyboard shortcuts, and then removes those bindings again.
+
+| ID | Check |
+| --- | --- |
+| K1 | Ctrl+Tab and Ctrl+Shift+Tab still move the switcher's selection |
+| K2 | Paseo's tab shortcuts bound to those keys do not fire. This needs a workspace with two tabs among the first 10; otherwise it is skipped. |
+| K3 | Other listeners see only those two combos as an unidentified key: Shift+Tab, Cmd+Ctrl+Tab and Ctrl+A are unchanged |
+| K4 | Disposing the plugin gives the keys back |
+
+**Lifecycle (R, E):** after a plugin reload there is exactly one switcher, which still claims Ctrl+Tab (`--reload` only). The plugin raised no page errors.
 
 ## When a check fails
 

@@ -93,6 +93,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   // Each connected host installs the plugin; only one switcher may own the keyboard.
   g.__paseoSwitcher?.dispose();
+  const keys = claimCtrlTab();
 
   let mru: string[] = readJson(MRU_KEY, []).filter((v: unknown) => typeof v === "string");
   let limit = clampLimit(readJson(LIMIT_KEY, DEFAULT_LIMIT));
@@ -790,7 +791,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   function onKeyDown(e: any) {
     if (e.isComposing) return;
-    if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (keys.realKey(e) === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
       stop(e);
       if (open) move(e.shiftKey ? -1 : 1);
       else begin("hold", e.shiftKey ? -1 : 1);
@@ -853,6 +854,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
       observer.disconnect();
       win.removeEventListener("keydown", onKeyDown, true);
       win.removeEventListener("keyup", onKeyUp, true);
+      keys.release();
       win.removeEventListener("blur", onBlur);
       win.removeEventListener("popstate", syncRoute);
       doc.removeEventListener("scroll", onScroll, { capture: true });
@@ -865,6 +867,40 @@ export function installSwitcher(paseo: Paseo): Switcher {
   };
   g.__paseoSwitcher = api;
   return api;
+}
+
+/**
+ * Paseo's shortcut engine listens on the window before any plugin loads, so a Paseo shortcut bound
+ * to Ctrl+Tab or Ctrl+Shift+Tab (Next tab, say) would act on the same press as the switcher. The
+ * switcher owns those keys: everyone else reads them as an unidentified key with no code, which
+ * matches no shortcut, while the switcher reads the real key through `realKey`.
+ */
+function claimCtrlTab(): { realKey(e: any): string; release(): void } {
+  const proto = g.KeyboardEvent?.prototype;
+  const get = (name: string) => (proto ? Object.getOwnPropertyDescriptor(proto, name) : undefined);
+  const key = get("key");
+  const code = get("code");
+  const [keyOf, codeOf, ctrlOf, metaOf, altOf] = [key, code, get("ctrlKey"), get("metaKey"), get("altKey")].map((d) => d?.get);
+  if (!keyOf || !codeOf || !ctrlOf || !metaOf || !altOf || !key?.configurable || !code?.configurable) {
+    return { realKey: (e) => e.key, release() {} };
+  }
+  const claimed = (e: any) => keyOf.call(e) === "Tab" && ctrlOf.call(e) && !metaOf.call(e) && !altOf.call(e);
+  const hiddenKey = function (this: any) {
+    return claimed(this) ? "Unidentified" : keyOf.call(this);
+  };
+  const hiddenCode = function (this: any) {
+    return claimed(this) ? "" : codeOf.call(this);
+  };
+  Object.defineProperty(proto, "key", { ...key, get: hiddenKey });
+  Object.defineProperty(proto, "code", { ...code, get: hiddenCode });
+  return {
+    realKey: (e) => keyOf.call(e),
+    release() {
+      // Restore only our own getters, in case something else wrapped them since.
+      if (get("key")?.get === hiddenKey) Object.defineProperty(proto, "key", key);
+      if (get("code")?.get === hiddenCode) Object.defineProperty(proto, "code", code);
+    },
+  };
 }
 
 function now(): number {

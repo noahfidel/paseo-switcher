@@ -17,6 +17,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS = resolve(HERE, "../artifacts");
 const ARGS = new Set(process.argv.slice(2));
 const SHOW_DELAY_MS = 110;
+/** Custom bindings like a user might set in Settings -> Keyboard shortcuts. */
+const TAB_OVERRIDES = {
+  "workspace-tab-navigate-relative-alt-shift-right": "Ctrl+Tab",
+  "workspace-tab-navigate-relative-alt-shift-left": "Ctrl+Shift+Tab",
+};
 
 // ---- results ---------------------------------------------------------------------------------
 
@@ -54,6 +59,14 @@ const rows = (page) =>
   page.$$eval('[data-testid^="sidebar-workspace-row-"]', (els) =>
     els.map((e) => e.dataset.testid.replace("sidebar-workspace-row-", "")),
   );
+/** The current workspace's tabs, and which one is selected. */
+const workspaceTabs = (page) =>
+  page.evaluate(() => {
+    const key = location.pathname.match(/workspace\/([^/?#]+)/)?.[1];
+    const pane = key && document.querySelector('[data-testid^="workspace-deck-entry-"][data-testid$=":' + key + '"]');
+    const tabs = pane ? [...pane.querySelectorAll('[data-testid^="workspace-tab-agent_"]')] : [];
+    return { count: tabs.length, selected: tabs.findIndex((t) => t.getAttribute("aria-selected") === "true") };
+  });
 const shownCount = (page) => page.evaluate(() => window.__pwsShown ?? 0);
 
 async function boot(page) {
@@ -603,6 +616,48 @@ async function perf(page, context) {
   check("P12", "Normal sidebar switching is not slower with the plugin (median within 20% + 40 ms)", on <= off * 1.2 + 40, { withPluginMs: on, withoutMs: off });
 }
 
+/** Paseo shortcuts on Ctrl+Tab or Ctrl+Shift+Tab, such as a user's Next tab / Previous tab, must not fire. */
+async function paseoShortcuts(page) {
+  await page.evaluate((o) => localStorage.setItem("@paseo:keyboard-shortcut-overrides", o), JSON.stringify(TAB_OVERRIDES));
+  await boot(page);
+  const tabbed = await (async () => {
+    for (const key of (await rows(page)).slice(0, 10)) {
+      await clickRow(page, key);
+      await page.waitForTimeout(1200);
+      if ((await workspaceTabs(page)).count >= 2) return key;
+    }
+    return null;
+  })();
+  if (!tabbed) {
+    info("K1", "Skipped: no workspace in the first 10 has two tabs", null);
+  } else {
+    const before = await workspaceTabs(page);
+    await holdOpen(page);
+    const afterTab = { strip: await strip(page), tabs: await workspaceTabs(page) };
+    await page.keyboard.down("Shift");
+    await page.keyboard.press("Tab");
+    await page.keyboard.up("Shift");
+    await page.waitForTimeout(150);
+    const afterShiftTab = { strip: await strip(page), tabs: await workspaceTabs(page) };
+    await page.keyboard.press("Escape");
+    await page.keyboard.up("Control");
+    check("K1", "Ctrl+Tab and Ctrl+Shift+Tab move the switcher even with Paseo shortcuts on them", afterTab.strip.selected === 1 && afterShiftTab.strip.selected === 0, { afterTab: afterTab.strip.selected, afterShiftTab: afterShiftTab.strip.selected });
+    check("K2", "Paseo's Next tab / Previous tab bound to them do not fire", afterTab.tabs.selected === before.selected && afterShiftTab.tabs.selected === before.selected, { before: before.selected, afterTab: afterTab.tabs.selected, afterShiftTab: afterShiftTab.tabs.selected });
+  }
+  const read = () =>
+    page.evaluate(() => {
+      const ev = (init) => new KeyboardEvent("keydown", { key: "Tab", code: "Tab", ...init });
+      const k = (e) => `${e.key}/${e.code}`;
+      return { ctrlTab: k(ev({ ctrlKey: true })), ctrlShiftTab: k(ev({ ctrlKey: true, shiftKey: true })), shiftTab: k(ev({ shiftKey: true })), cmdCtrlTab: k(ev({ ctrlKey: true, metaKey: true })), ctrlA: k(new KeyboardEvent("keydown", { key: "a", code: "KeyA", ctrlKey: true })) };
+    });
+  const installed = await read();
+  check("K3", "Only Ctrl+Tab and Ctrl+Shift+Tab are hidden from other listeners", installed.ctrlTab === "Unidentified/" && installed.ctrlShiftTab === "Unidentified/" && installed.shiftTab === "Tab/Tab" && installed.cmdCtrlTab === "Tab/Tab" && installed.ctrlA === "a/KeyA", installed);
+  await page.evaluate(() => window.__paseoSwitcher.dispose());
+  const disposed = await read();
+  check("K4", "Disposing the plugin gives the keys back", disposed.ctrlTab === "Tab/Tab" && disposed.ctrlShiftTab === "Tab/Tab", disposed);
+  await page.evaluate(() => localStorage.removeItem("@paseo:keyboard-shortcut-overrides"));
+}
+
 async function reloadCleanup(page) {
   await boot(page);
   execFileSync("paseo", ["plugin", "reload", "paseo-switcher"], { stdio: "ignore" });
@@ -616,6 +671,8 @@ async function reloadCleanup(page) {
   await page.keyboard.press("Escape");
   await page.keyboard.up("Control");
   check("R1", "After a plugin reload there is exactly one switcher", counts.hosts === 1 && counts.styles === 1 && roots === 1, { ...counts, roots });
+  const key = await page.evaluate(() => new KeyboardEvent("keydown", { key: "Tab", ctrlKey: true }).key);
+  check("R2", "After a reload the switcher still claims Ctrl+Tab", key === "Unidentified", key);
 }
 
 // ---- main ------------------------------------------------------------------------------------------
@@ -655,6 +712,7 @@ async function main() {
     await listLayout(page);
     await visuals(page);
     await perf(page, context);
+    await paseoShortcuts(page);
     if (ARGS.has("--reload")) await reloadCleanup(page);
     const ours = pageErrors.filter((e) => /pws|switcher/i.test(e));
     check("E1", "No page errors from the plugin", ours.length === 0, ours);
