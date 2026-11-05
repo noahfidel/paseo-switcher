@@ -64,7 +64,7 @@ Status follows Paseo's sidebar: a turning ring while an agent runs, amber when i
 
 ## How it stays fast
 
-A quick tap does no drawing at all, only a click on the previous workspace. The list draws in about 2 ms and its only background work is one lookup every two seconds of which chat tab is open, plus, with messages counted as visits, a refresh of the agent list every 15 seconds in idle time, and filtering redraws it in a few milliseconds per key. Thumbnails are not live copies of the app: in that layout, while you stay in a workspace, the plugin rasterizes a small image of it when the browser is idle, and never during the two seconds after a switch. The strip itself is about 40 elements and draws in a few milliseconds. The end-to-end suite checks these budgets, along with the claim that normal sidebar switching is no slower with the plugin on. See [TESTING.md](TESTING.md).
+A quick tap does no drawing at all, only a click on the previous workspace. The list draws in about 2 ms and its only background work is one lookup every two seconds of which chat tab is open, plus, with messages counted as visits, a refresh of the agent list every 5 seconds in idle time, and filtering redraws it in a few milliseconds per key. Thumbnails are not live copies of the app: in that layout, while you stay in a workspace, the plugin rasterizes a small image of it when the browser is idle, and never during the two seconds after a switch. The strip itself is about 40 elements and draws in a few milliseconds. The end-to-end suite checks these budgets, along with the claim that normal sidebar switching is no slower with the plugin on. See [TESTING.md](TESTING.md).
 
 ## Limits
 

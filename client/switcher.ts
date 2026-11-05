@@ -89,8 +89,8 @@ const REFRESH_MS = 2000;
  */
 const QUIET_AFTER_SWITCH_MS = 2000;
 const WORKSPACES_STALE_MS = 5000;
-/** While the switcher is closed, the agent list is refreshed in idle time this often, so messages count. */
-const AGENTS_BACKGROUND_MS = 15000;
+/** While the switcher is closed, the agent list is refreshed in idle time this often (5 s), so messages count. */
+const AGENTS_BACKGROUND_MS = 5000;
 const MAX_THUMBS = 12;
 
 const CARD_MAX = 240;
@@ -369,7 +369,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
         }
         agents = { serverId: serverId(), list };
         agentsAt = Date.now();
+        const before = visits;
         countMessageVisits();
+        if (root && visits !== before) refreshCardsAndRender();
       })
       .catch(() => {
         // Keep the previous list; switching then uses only the remembered agent.
@@ -697,16 +699,20 @@ export function installSwitcher(paseo: Paseo): Switcher {
     if (Date.now() - agentsAt > WORKSPACES_STALE_MS) void loadAgents();
     if (Date.now() - workspacesAt > WORKSPACES_STALE_MS) {
       void loadWorkspaces().then(() => {
-        if (!root) return;
-        const selected = cards[index]?.key;
-        const before = cards.length;
-        refreshCards();
-        const kept = cards.findIndex((c) => c.key === selected);
-        // A list that was empty while loading starts like a fresh open: on the previous workspace.
-        index = kept >= 0 ? kept : before === 0 && !query ? initialIndex(cards, currentKey()) : Math.max(0, Math.min(index, cards.length - 1));
-        render();
+        if (root) refreshCardsAndRender();
       });
     }
+  }
+
+  /** Rebuilds the open list after new data landed, keeping the selected card if it is still there. */
+  function refreshCardsAndRender() {
+    const selected = cards[index]?.key;
+    const before = cards.length;
+    refreshCards();
+    const kept = cards.findIndex((c) => c.key === selected);
+    // A list that was empty while loading starts like a fresh open: on the previous workspace.
+    index = kept >= 0 ? kept : before === 0 && !query ? initialIndex(cards, currentKey()) : Math.max(0, Math.min(index, cards.length - 1));
+    render();
   }
 
   function refreshCards() {
