@@ -1157,7 +1157,8 @@ const CSS = `
   /* Pinned near the top like Spotlight, so the sheet grows downward and never jumps while you type. */
   display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px;
   padding-top: max(48px, 16vh); box-sizing: border-box;
-  background: rgba(24, 24, 27, 0.18);
+  /* Dim enough that page text never competes with the sheet and hint resting on it. */
+  background: rgba(24, 24, 27, 0.34);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none;
   animation: pws-fade 140ms ease-out;
@@ -1183,7 +1184,7 @@ const CSS = `
   --pws-wait-dot: #fbbf24;
   --pws-run: #60a5fa;
   --pws-merged: #a78bfa;
-  background: rgba(0, 0, 0, 0.38);
+  background: rgba(0, 0, 0, 0.5);
 }
 /* One authored moment: the panel settles in from just below. Re-renders while open never replay it. */
 .pws-sheet { animation: pws-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
@@ -1196,7 +1197,8 @@ const CSS = `
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.26), 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 .pws-panel {
-  display: flex; gap: 6px; padding: 10px; box-sizing: border-box; overflow-x: auto;
+  /* Each card keeps its own height, so a two-line name never stretches the selection ring. */
+  display: flex; align-items: flex-start; gap: 6px; padding: 10px; box-sizing: border-box; overflow-x: auto;
   scrollbar-width: thin; scrollbar-color: var(--pws-ring) transparent;
 }
 /* An overflowing strip fades at its edges instead of cutting a card mid-word. */
@@ -1258,8 +1260,7 @@ const CSS = `
   display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 14px;
   max-width: calc(100vw - 32px); box-sizing: border-box;
   color: var(--pws-fg); font-size: 12px; line-height: 18px; padding: 5px 12px; border-radius: 999px;
-  background: var(--pws-panel); border: 1px solid var(--pws-border);
-  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  background: var(--pws-solid); border: 1px solid var(--pws-border);
 }
 .pws-hint-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .pws-hint-item > span { margin-left: 2px; opacity: 0.85; }
@@ -1282,7 +1283,7 @@ const CSS = `
 .pws-note { color: var(--pws-muted); font-size: 12px; padding: 6px 12px 6px 48px; }
 .pws-list .pws-sheet { width: min(680px, calc(100vw - 32px)); max-width: none; border-radius: 18px; }
 .pws-list .pws-panel {
-  flex-direction: column; gap: 2px; padding: 6px;
+  flex-direction: column; align-items: stretch; gap: 2px; padding: 6px;
   max-height: calc(100vh - max(48px, 16vh) - 150px); overflow-x: hidden; overflow-y: auto;
 }
 .pws-row {
@@ -1327,7 +1328,7 @@ const CSS = `
 @keyframes pws-turn { to { transform: rotate(360deg); } }
 @keyframes pws-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .pws-root, .pws-panel, .pws-query, .pws-hint, .pws-caret { animation: none; }
+  .pws-root, .pws-sheet, .pws-hint, .pws-caret { animation: none; }
   .pws-card { transition: none; }
   /* A still ring reads as "in progress" without turning. */
   .pws-spin { animation: none; border-style: dotted; border-top-color: currentColor; }
