@@ -125,6 +125,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
   let dark = false;
   /** Typed while the switcher is open; filters every workspace, not only recent ones. */
   let query = "";
+  /** Every match for the query; only the first MAX_LIMIT are listed. */
+  let matches = 0;
   /** The host of the loaded workspace list, for when neither the route nor the history names one. */
   let homeServer: string | null = null;
   const coarse = Boolean(win.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
@@ -202,8 +204,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
             status: w.status,
             additions: w.diffStat?.additions ?? 0,
             deletions: w.diffStat?.deletions ?? 0,
-            // Idle workspaces may have no activity time; fall back to the latest one the daemon has.
-            activityAt: latest(w.activityAt, w.lastUserMessageAt, w.statusEnteredAt, w.createdAt),
+            // The sidebar's own time; idle workspaces may have none, so fall back to the latest one known.
+            activityAt: latest(w.activityAt) || latest(w.lastUserMessageAt, w.statusEnteredAt, w.createdAt),
             statusAt: latest(w.statusEnteredAt),
             ahead: w.gitRuntime?.aheadOfOrigin ?? 0,
             pr: pr
@@ -368,8 +370,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function cropOf(width: number, height: number) {
     const w = width / ZOOM;
     const h = Math.min(height, w * ASPECT);
-    // Top-anchored: the tab row names the agent, and a short conversation starts at the top.
-    return { x: (width - w) / 2, y: 0, width: w, height: h };
+    // Anchored top-left: the tab row names the agent, a short conversation starts at the top, and
+    // the conversation column sits left of centre when a side panel is open.
+    return { x: 0, y: 0, width: w, height: h };
   }
 
   const pending = new Map<string, Snapshot>();
@@ -555,7 +558,13 @@ export function installSwitcher(paseo: Paseo): Switcher {
   }
 
   function refreshCards() {
-    cards = query ? filterCards(query, mru, serverId(), workspaces) : buildCards(mru, serverId(), workspaces, limit);
+    if (!query) {
+      cards = buildCards(mru, serverId(), workspaces, limit);
+      return;
+    }
+    const all = filterCards(query, mru, serverId(), workspaces, Infinity);
+    matches = all.length;
+    cards = all.slice(0, MAX_LIMIT);
   }
 
   /** Typing filters; it also turns a held switcher into one that waits for Enter or a click. */
@@ -634,20 +643,22 @@ export function installSwitcher(paseo: Paseo): Switcher {
     }
     const surface = surfaceOf(currentPane() ?? doc.body);
     dark = isDark(surface);
-    const list = layout === "list";
+    // A phone has room for one column; thumbnails would be cut off at the edges.
+    const list = layout === "list" || narrow();
     root.classList.toggle("pws-dark", dark);
     root.classList.toggle("pws-list", list);
     root.classList.toggle("pws-entered", !fresh);
     root.style.setProperty("--pws-surface", surface);
     if (list) {
-      // Rows plus panel padding, against the panel's max height (the window less 180px).
-      overflowing = cards.length * ROW_H + 12 > win.innerHeight - 180;
+      // Rows plus panel padding, against the panel's max height (see .pws-list .pws-panel).
+      overflowing = cards.length * ROW_H + 12 > win.innerHeight - Math.max(48, win.innerHeight * 0.16) - 150;
     } else {
       // Fit every card in the window when possible, within readable thumbnail sizes.
       const fit = Math.floor((win.innerWidth - 96 - 20 - (cards.length - 1) * 6) / Math.max(cards.length, 1)) - 16;
       const cardW = Math.max(CARD_MIN, Math.min(CARD_MAX, fit));
       // Card width + padding + gap, plus panel padding, against the panel's max width.
       overflowing = cards.length * (cardW + 16 + 6) + 14 > win.innerWidth - 96;
+      root.classList.toggle("pws-overflow", overflowing);
       root.style.setProperty("--pws-w", `${cardW}px`);
       root.style.setProperty("--pws-h", `${Math.round(cardW * ASPECT)}px`);
     }
@@ -659,15 +670,26 @@ export function installSwitcher(paseo: Paseo): Switcher {
     if (cards.length) cards.forEach((card, i) => panel.appendChild(list ? renderRow(card, i, at) : renderCard(card, i)));
     else panel.appendChild(emptyState());
     if (!query && cards.length === 1 && cards[0].key === currentKey()) {
-      panel.appendChild(el("div", "pws-note", "Open another workspace, then Ctrl+Tab flips between the two."));
+      const note = touchScreen() ? "Open another workspace to switch between them here." : "Open another workspace, then Ctrl+Tab flips between the two.";
+      panel.appendChild(el("div", "pws-note", note));
     }
-    const parts: Node[] = [];
-    if (query) parts.push(queryBar());
-    parts.push(panel);
+    // One sheet: the query, when there is one, is its header, so typing never moves the rows.
+    const sheet = el("div", "pws-sheet");
+    if (query) sheet.appendChild(queryBar());
+    sheet.appendChild(panel);
+    const parts: Node[] = [sheet];
     if (cards.length || query) parts.push(hintBar());
     root.replaceChildren(...parts);
     if (fresh) host.appendChild(root);
     select();
+  }
+
+  function narrow(): boolean {
+    return win.innerWidth < 600;
+  }
+
+  function touchScreen(): boolean {
+    return coarse || narrow();
   }
 
   /** The typed filter, shown above the results like a search field. */
@@ -677,8 +699,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     const text = el("span", "pws-query-text", query);
     bar.appendChild(text);
     bar.appendChild(el("span", "pws-caret"));
-    const count = cards.length === 1 ? "1 match" : `${cards.length === MAX_LIMIT ? `${MAX_LIMIT}+` : cards.length} matches`;
-    bar.appendChild(el("span", "pws-query-count", cards.length ? count : ""));
+    const count = matches > cards.length ? `${cards.length} of ${matches}` : matches === 1 ? "1 match" : `${matches} matches`;
+    bar.appendChild(el("span", "pws-query-count", matches ? count : ""));
     return bar;
   }
 
@@ -702,7 +724,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   /** Keys that work right now, as keycaps. Touch screens get one plain sentence instead. */
   function hintBar(): Node {
     const bar = el("div", "pws-hint");
-    if (coarse || win.innerWidth < 520) {
+    if (touchScreen()) {
       bar.textContent = "Tap a workspace to switch";
       return bar;
     }
@@ -811,9 +833,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
     node.appendChild(el("kbd", "pws-number", i < 9 ? String(i + 1) : ""));
     const project = info?.project ?? null;
-    const badge = el("div", "pws-badge", (project ?? "?").slice(0, 1).toUpperCase());
-    badge.style.background = hue(project ?? card.key);
-    node.appendChild(badge);
+    node.appendChild(el("div", "pws-badge", (project ?? "?").slice(0, 1).toUpperCase()));
 
     const main = el("div", "pws-main");
     main.appendChild(nameNode("pws-name", name));
@@ -876,9 +896,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   function placeholder(project: string | null, key: string): Node {
     const box = el("div", "pws-placeholder");
-    const initial = el("div", "pws-initial", (project ?? "?").slice(0, 1).toUpperCase());
-    initial.style.background = hue(project ?? key);
-    box.appendChild(initial);
+    box.appendChild(el("div", "pws-initial", (project ?? "?").slice(0, 1).toUpperCase()));
     box.appendChild(el("div", "pws-placeholder-text", "No preview yet"));
     return box;
   }
@@ -1094,12 +1112,6 @@ function latest(...times: Array<string | null | undefined>): number {
   return best;
 }
 
-function hue(text: string): string {
-  let h = 0;
-  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 360;
-  return `hsl(${h} 45% 45%)`;
-}
-
 const PR_ICON = { open: "pr", draft: "prDraft", merged: "merge", closed: "prClosed" } as const;
 const CHECK_ICON = { success: "circleCheck", failure: "circleX", pending: "circle" } as const;
 /** "pending", not Paseo's "running", so checks never read like the agent's own status. */
@@ -1121,7 +1133,9 @@ const ICONS = {
 const CSS = `
 .pws-host { position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483000; }
 .pws-root {
-  --pws-panel: rgba(246, 246, 247, 0.94);
+  --pws-panel: rgba(246, 246, 247, 0.96);
+  --pws-solid: #f6f6f7;
+  --pws-tile: rgba(0, 0, 0, 0.07);
   --pws-border: rgba(0, 0, 0, 0.1);
   --pws-selected: rgba(0, 0, 0, 0.07);
   --pws-ring: rgba(0, 0, 0, 0.16);
@@ -1140,14 +1154,18 @@ const CSS = `
   --pws-run: #2563eb;
   --pws-merged: #7c3aed;
   position: fixed; inset: 0; z-index: 2147483000; contain: strict;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  /* Pinned near the top like Spotlight, so the sheet grows downward and never jumps while you type. */
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px;
+  padding-top: max(48px, 16vh); box-sizing: border-box;
   background: rgba(24, 24, 27, 0.18);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none;
   animation: pws-fade 140ms ease-out;
 }
 .pws-root.pws-dark {
-  --pws-panel: rgba(30, 30, 33, 0.92);
+  --pws-panel: rgba(30, 30, 33, 0.95);
+  --pws-solid: #1e1e21;
+  --pws-tile: rgba(255, 255, 255, 0.1);
   --pws-border: rgba(255, 255, 255, 0.09);
   --pws-selected: rgba(255, 255, 255, 0.08);
   --pws-ring: rgba(255, 255, 255, 0.17);
@@ -1168,15 +1186,23 @@ const CSS = `
   background: rgba(0, 0, 0, 0.38);
 }
 /* One authored moment: the panel settles in from just below. Re-renders while open never replay it. */
-.pws-panel, .pws-query { animation: pws-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+.pws-sheet { animation: pws-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
 .pws-hint { animation: pws-fade 220ms ease-out; }
-.pws-entered .pws-panel, .pws-entered .pws-query, .pws-entered .pws-hint { animation: none; }
-.pws-panel {
-  display: flex; gap: 6px; padding: 10px; max-width: calc(100vw - 96px); box-sizing: border-box; overflow-x: auto;
+.pws-entered .pws-sheet, .pws-entered .pws-hint { animation: none; }
+.pws-sheet {
+  display: flex; flex-direction: column; max-width: calc(100vw - 96px); box-sizing: border-box; overflow: hidden;
   background: var(--pws-panel); border: 1px solid var(--pws-border); border-radius: 22px;
   backdrop-filter: blur(28px) saturate(1.4); -webkit-backdrop-filter: blur(28px) saturate(1.4);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.26), 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.pws-panel {
+  display: flex; gap: 6px; padding: 10px; box-sizing: border-box; overflow-x: auto;
   scrollbar-width: thin; scrollbar-color: var(--pws-ring) transparent;
+}
+/* An overflowing strip fades at its edges instead of cutting a card mid-word. */
+.pws-overflow .pws-panel {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
 }
 .pws-card {
   flex: 0 0 auto; width: var(--pws-w); padding: 8px 8px 10px; border-radius: 15px; cursor: default;
@@ -1193,8 +1219,8 @@ const CSS = `
   background: var(--pws-faint);
 }
 .pws-initial {
-  width: 36px; height: 36px; border-radius: 10px; color: #fff; font-size: 17px; font-weight: 650;
-  display: flex; align-items: center; justify-content: center; opacity: 0.9;
+  width: 36px; height: 36px; border-radius: 10px; background: var(--pws-tile); color: var(--pws-muted); font-size: 17px; font-weight: 650;
+  display: flex; align-items: center; justify-content: center;
 }
 .pws-placeholder-text { color: var(--pws-muted); font-size: 12px; }
 .pws-number, .pws-kbd {
@@ -1205,6 +1231,9 @@ const CSS = `
 }
 .pws-thumb .pws-number { position: absolute; top: 6px; right: 6px; }
 .pws-title { display: flex; align-items: center; gap: 7px; margin: 10px 2px 0; min-width: 0; }
+.pws-card:not(.pws-row) .pws-name {
+  white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; line-height: 19px;
+}
 .pws-name {
   color: var(--pws-fg); font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1237,14 +1266,11 @@ const CSS = `
 .pws-hint-type { color: var(--pws-muted); }
 .pws-hint .pws-kbd { color: var(--pws-fg); }
 .pws-query {
-  display: flex; align-items: center; gap: 10px; box-sizing: border-box;
-  width: min(520px, calc(100vw - 32px)); height: 44px; padding: 0 16px;
-  background: var(--pws-panel); border: 1px solid var(--pws-border); border-radius: 14px;
-  backdrop-filter: blur(28px) saturate(1.4); -webkit-backdrop-filter: blur(28px) saturate(1.4);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  display: flex; align-items: center; gap: 10px; box-sizing: border-box; flex: 0 0 auto;
+  height: 48px; padding: 0 18px; min-width: 0;
+  background: var(--pws-solid); border-bottom: 1px solid var(--pws-border);
   color: var(--pws-fg); font-size: 15px;
 }
-.pws-list .pws-query { width: min(680px, calc(100vw - 32px)); }
 .pws-query-icon { width: 16px; height: 16px; color: var(--pws-muted); flex: 0 0 auto; }
 .pws-query-text { white-space: pre; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-weight: 500; }
 .pws-caret { flex: 0 0 auto; width: 1.5px; height: 19px; margin-left: -9px; background: var(--pws-fg); animation: pws-blink 1s steps(1) infinite; }
@@ -1254,9 +1280,10 @@ const CSS = `
 .pws-empty-text { color: var(--pws-muted); font-size: 12.5px; margin-top: 4px; }
 .pws-loading { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; color: var(--pws-muted); }
 .pws-note { color: var(--pws-muted); font-size: 12px; padding: 6px 12px 6px 48px; }
+.pws-list .pws-sheet { width: min(680px, calc(100vw - 32px)); max-width: none; border-radius: 18px; }
 .pws-list .pws-panel {
-  flex-direction: column; gap: 2px; padding: 6px; width: min(680px, calc(100vw - 32px)); max-width: none;
-  max-height: calc(100vh - 180px); overflow-x: hidden; overflow-y: auto; border-radius: 18px;
+  flex-direction: column; gap: 2px; padding: 6px;
+  max-height: calc(100vh - max(48px, 16vh) - 150px); overflow-x: hidden; overflow-y: auto;
 }
 .pws-row {
   display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: start; column-gap: 12px;
@@ -1264,7 +1291,7 @@ const CSS = `
 }
 .pws-list .pws-number { margin-top: 1px; }
 .pws-badge {
-  width: 22px; height: 22px; border-radius: 7px; color: #fff; font-size: 12px; font-weight: 650;
+  width: 22px; height: 22px; border-radius: 7px; background: var(--pws-tile); color: var(--pws-muted); font-size: 12px; font-weight: 650;
   display: flex; align-items: center; justify-content: center;
 }
 .pws-main { min-width: 0; }
@@ -1290,7 +1317,7 @@ const CSS = `
 .pws-status-failed { color: var(--pws-bad); }
 .pws-time { color: var(--pws-muted); font-variant-numeric: tabular-nums; line-height: 17px; margin-top: 3px; }
 .pws-status + .pws-time { margin-top: 0; }
-@media (max-width: 520px) {
+@media (max-width: 599px) {
   .pws-row { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 10px; padding: 10px; }
   .pws-badge { display: none; }
   .pws-note { padding-left: 12px; }
