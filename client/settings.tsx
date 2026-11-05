@@ -26,6 +26,7 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
     const [layout, setLayout] = useState<Layout>(switcher.getLayout());
     const [shortcut, setShortcut] = useState<Shortcut>(switcher.getShortcut());
     const [includeBackground, setIncludeBackground] = useState(switcher.getIncludeBackground());
+    const [countMessages, setCountMessages] = useState(switcher.getCountMessages());
     return (
       <SettingsSection title="Switcher">
         <SettingsCard>
@@ -66,6 +67,15 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
             onValueChange={(value) => {
               switcher.setIncludeBackground(value);
               setIncludeBackground(switcher.getIncludeBackground());
+            }}
+          />
+          <SettingsSwitch
+            label="Count chats you message as visits"
+            hint="A workspace you send a message to ranks as if you had just opened it, even from a screen outside it (a bot chat, say). Off: only opening a workspace counts."
+            value={countMessages}
+            onValueChange={(value) => {
+              switcher.setCountMessages(value);
+              setCountMessages(switcher.getCountMessages());
             }}
           />
         </SettingsCard>

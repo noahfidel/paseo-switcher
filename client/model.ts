@@ -103,7 +103,8 @@ export const MIN_LIMIT = 2;
 /** One card per number key. */
 export const MAX_LIMIT = 9;
 export const DEFAULT_LIMIT = 5;
-const MAX_MRU = 40;
+/** How many visited workspaces are remembered. */
+export const MAX_VISITS = 40;
 
 export function clampLimit(value: unknown): number {
   const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
@@ -120,10 +121,79 @@ export function splitKey(key: string): { serverId: string; workspaceId: string }
   return { serverId: key.slice(0, at), workspaceId: key.slice(at + 1) };
 }
 
-/** Moves `key` to the front of the most-recently-used list. */
-export function touch(mru: readonly string[], key: string): string[] {
-  if (mru[0] === key) return mru as string[];
-  return [key, ...mru.filter((k) => k !== key)].slice(0, MAX_MRU);
+// ---- visit times ----------------------------------------------------------------------------------
+
+/** When each workspace was last visited (opened, or messaged when that counts), in epoch ms. */
+export type Visits = Record<string, number>;
+
+/** Stored visit times, or null when there are none yet (so the old visit order can be migrated). */
+export function parseVisits(value: unknown): Visits | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const visits: Visits = {};
+  for (const [k, v] of Object.entries(value)) if (typeof v === "number" && Number.isFinite(v)) visits[k] = v;
+  return visits;
+}
+
+/** Turns the old most-recent-first key list into visit times one millisecond apart, keeping its order. */
+export function migrateMru(mru: unknown, now: number): Visits {
+  const visits: Visits = {};
+  if (!Array.isArray(mru)) return visits;
+  let i = 0;
+  for (const key of mru) {
+    if (i >= MAX_VISITS) break;
+    if (typeof key !== "string" || Object.hasOwn(visits, key)) continue;
+    visits[key] = now - i++;
+  }
+  return visits;
+}
+
+/** Visited workspace keys, most recent first. */
+export function recentKeys(visits: Visits): string[] {
+  return Object.keys(visits).sort((a, b) => visits[b] - visits[a]);
+}
+
+function capVisits(visits: Visits): Visits {
+  const keys = recentKeys(visits);
+  if (keys.length <= MAX_VISITS) return visits;
+  const kept: Visits = {};
+  for (const key of keys.slice(0, MAX_VISITS)) kept[key] = visits[key];
+  return kept;
+}
+
+/** Records a visit to `key` at `at`, dropping the oldest visits past the cap. */
+export function recordVisit(visits: Visits, key: string, at: number): Visits {
+  if (visits[key] === at) return visits;
+  return capVisits({ ...visits, [key]: at });
+}
+
+/**
+ * Counts the last message you sent in each workspace as a visit at that time. Only agents listed
+ * for the host in question count, and only their `lastUserMessageAt`; agent output never does.
+ * Returns `visits` itself when nothing moved.
+ */
+export function mergeMessageVisits(
+  visits: Visits,
+  serverId: string | null,
+  agents: { serverId: string | null; list: readonly AgentInfo[] } | null,
+): Visits {
+  if (!serverId || !agents || agents.serverId !== serverId) return visits;
+  let next: Visits | null = null;
+  for (const agent of agents.list) {
+    const at = agent.lastUserMessageAt;
+    if (!agent.workspaceId || !at) continue;
+    const key = workspaceKey(serverId, agent.workspaceId);
+    const current = (next ?? visits)[key];
+    if (current !== undefined && current >= at) continue;
+    next ??= { ...visits };
+    next[key] = at;
+  }
+  return next ? capVisits(next) : visits;
+}
+
+export const DEFAULT_COUNT_MESSAGES = true;
+
+export function parseCountMessages(value: unknown): boolean {
+  return typeof value === "boolean" ? value : DEFAULT_COUNT_MESSAGES;
 }
 
 /**
@@ -250,6 +320,8 @@ export interface AgentInfo {
   id: string;
   workspaceId: string | null;
   activityAt: number;
+  /** When you last sent this agent a message (epoch ms); null when never. */
+  lastUserMessageAt?: number | null;
 }
 
 const AGENT_TAB_PREFIX = "workspace-tab-agent_";

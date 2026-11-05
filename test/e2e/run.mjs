@@ -44,7 +44,12 @@ const cur = (page) =>
     const m = location.pathname.match(/\/h\/([^/]+)\/workspace\/([^/?#]+)/);
     return m ? `${decodeURIComponent(m[1])}:${decodeURIComponent(m[2])}` : null;
   });
-const mru = (page) => page.evaluate(() => JSON.parse(localStorage.getItem("paseo-switcher:mru") || "[]"));
+/** Visited workspace keys, most recent first, from the stored visit times. */
+const mru = (page) =>
+  page.evaluate(() => {
+    const visits = JSON.parse(localStorage.getItem("paseo-switcher:visits") || "{}");
+    return Object.keys(visits).sort((a, b) => visits[b] - visits[a]);
+  });
 const strip = (page) =>
   page.evaluate(() => {
     const cards = [...document.querySelectorAll(".pws-card")];
@@ -762,7 +767,10 @@ async function main() {
     // Start from a clean history and the default limit.
     await page.evaluate(() => {
       localStorage.removeItem("paseo-switcher:mru");
+      localStorage.removeItem("paseo-switcher:visits");
       localStorage.removeItem("paseo-switcher:limit");
+      // These suites check the order that opening workspaces makes; messages sent meanwhile would interleave.
+      localStorage.setItem("paseo-switcher:count-messages", "false");
       // Most suites cover the thumbnail strip; the list suite checks the default itself.
       localStorage.setItem("paseo-switcher:layout", '"strip"');
     });

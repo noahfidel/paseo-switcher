@@ -27,9 +27,16 @@ import {
   initialIndex,
   parseLayout,
   previousKey,
-  touch,
   wrap,
   type WorkspaceInfo,
+  DEFAULT_COUNT_MESSAGES,
+  MAX_VISITS,
+  mergeMessageVisits,
+  migrateMru,
+  parseCountMessages,
+  parseVisits,
+  recentKeys,
+  recordVisit,
 } from "../client/model.ts";
 
 const S = "srv_a";
@@ -44,12 +51,6 @@ const info = (id: string, activityAt: number): WorkspaceInfo => ({
   activityAt,
 });
 const list = (...items: WorkspaceInfo[]) => new Map(items.map((w) => [w.id, w]));
-
-test("touch moves a key to the front without duplicates", () => {
-  assert.deepEqual(touch(["a", "b", "c"], "c"), ["c", "a", "b"]);
-  const same = ["a", "b"];
-  assert.equal(touch(same, "a"), same, "unchanged order returns the same array");
-});
 
 test("cards are the most recent visits, capped at the limit", () => {
   const mru = ["1", "2", "3", "4", "5", "6", "7"].map((id) => `${S}:${id}`);
@@ -371,4 +372,93 @@ test("agentToOpen prefers the remembered agent while it still exists in that wor
   // Nothing at all: keep Paseo's default.
   assert.equal(agentToOpen("w3", undefined, agents), null);
   assert.equal(agentToOpen("w3", undefined, null), null);
+});
+
+// ---- visit times and messages as visits ---------------------------------------------------------
+
+const k = (id: string) => `${S}:${id}`;
+
+test("migrating an old visit order keeps it", () => {
+  const visits = migrateMru([k("c"), k("a"), k("b")], 1_000_000);
+  assert.deepEqual(recentKeys(visits), [k("c"), k("a"), k("b")]);
+  // Junk in old storage is dropped, and a repeated key keeps its first (most recent) place.
+  assert.deepEqual(recentKeys(migrateMru([k("a"), 3, k("b"), k("a")] as unknown[], 1_000_000)), [k("a"), k("b")]);
+  assert.deepEqual(migrateMru("nope", 1), {});
+});
+
+test("parseVisits keeps only finite numeric times", () => {
+  assert.deepEqual(parseVisits({ [k("a")]: 5, [k("b")]: "6", [k("c")]: Number.NaN }), { [k("a")]: 5 });
+  assert.equal(parseVisits(null), null);
+  assert.equal(parseVisits([1, 2]), null);
+});
+
+test("recordVisit stores the time and sorts newest first", () => {
+  let visits = recordVisit({}, k("a"), 100);
+  visits = recordVisit(visits, k("b"), 200);
+  visits = recordVisit(visits, k("a"), 300);
+  assert.deepEqual(recentKeys(visits), [k("a"), k("b")]);
+  assert.equal(visits[k("a")], 300);
+});
+
+test("recordVisit keeps the newest visits past the cap", () => {
+  let visits: Record<string, number> = {};
+  for (let i = 0; i < MAX_VISITS + 5; i++) visits = recordVisit(visits, k(`w${i}`), i);
+  const keys = recentKeys(visits);
+  assert.equal(keys.length, MAX_VISITS);
+  assert.equal(keys[0], k(`w${MAX_VISITS + 4}`));
+  assert.ok(!keys.includes(k("w0")));
+});
+
+const msg = (workspaceId: string | null, lastUserMessageAt: number | null): AgentInfo => ({
+  id: `agent-${workspaceId}-${lastUserMessageAt}`,
+  workspaceId,
+  activityAt: lastUserMessageAt ?? 0,
+  lastUserMessageAt,
+});
+
+test("a message newer than a workspace's visit moves it to the front", () => {
+  const visits = { [k("a")]: 300, [k("bot")]: 100 };
+  const next = mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", 500), msg("bot", 200)] });
+  assert.deepEqual(recentKeys(next), [k("bot"), k("a")]);
+  assert.equal(next[k("bot")], 500);
+  assert.equal(previousKey(recentKeys(next), k("a")), k("bot"));
+});
+
+test("a message older than the stored visit does not reorder", () => {
+  const visits = { [k("a")]: 300, [k("bot")]: 250 };
+  const next = mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", 200)] });
+  assert.equal(next, visits);
+  assert.deepEqual(recentKeys(next), [k("a"), k("bot")]);
+});
+
+test("a workspace never visited but messaged gets added", () => {
+  const next = mergeMessageVisits({ [k("a")]: 300 }, S, { serverId: S, list: [msg("bot", 100)] });
+  assert.deepEqual(recentKeys(next), [k("a"), k("bot")]);
+});
+
+test("agents without a message, without a workspace, or from another host change nothing", () => {
+  const visits = { [k("a")]: 300 };
+  assert.equal(mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", null), msg(null, 900)] }), visits);
+  assert.equal(mergeMessageVisits(visits, S, { serverId: "srv_b", list: [msg("bot", 900)] }), visits);
+  assert.equal(mergeMessageVisits(visits, null, { serverId: null, list: [msg("bot", 900)] }), visits);
+  assert.equal(mergeMessageVisits(visits, S, null), visits);
+});
+
+test("merging messages respects the cap", () => {
+  const visits: Record<string, number> = {};
+  for (let i = 0; i < MAX_VISITS; i++) visits[k(`w${i}`)] = 1000 + i;
+  const next = mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", 5000), msg("stale", 1)] });
+  const keys = recentKeys(next);
+  assert.equal(keys.length, MAX_VISITS);
+  assert.equal(keys[0], k("bot"));
+  assert.ok(!keys.includes(k("stale")));
+  assert.ok(!keys.includes(k("w0")));
+});
+
+test("counting messages as visits is on by default", () => {
+  assert.equal(DEFAULT_COUNT_MESSAGES, true);
+  assert.equal(parseCountMessages(undefined), true);
+  assert.equal(parseCountMessages("yes"), true);
+  assert.equal(parseCountMessages(false), false);
+  assert.equal(parseCountMessages(true), true);
 });

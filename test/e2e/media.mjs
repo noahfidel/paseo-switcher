@@ -121,6 +121,7 @@ async function prepare(browser, { scheme = "dark", layout = "list", width = 1440
     try {
       localStorage.setItem("paseo-switcher:layout", JSON.stringify(layout));
       localStorage.removeItem("paseo-switcher:mru");
+      localStorage.removeItem("paseo-switcher:visits");
     } catch {}
   }, layout);
   const page = await context.newPage();

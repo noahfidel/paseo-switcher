@@ -11,6 +11,14 @@ import {
   clampLimit,
   DEFAULT_LAYOUT,
   DEFAULT_INCLUDE_BACKGROUND,
+  DEFAULT_COUNT_MESSAGES,
+  mergeMessageVisits,
+  migrateMru,
+  parseCountMessages,
+  parseVisits,
+  recentKeys,
+  recordVisit,
+  type Visits,
   DEFAULT_SHORTCUT,
   filterCards,
   listWithBackgroundFallback,
@@ -28,7 +36,6 @@ import {
   previousKey,
   SHORTCUTS,
   splitKey,
-  touch,
   workspaceKey,
   wrap,
   type Card,
@@ -60,7 +67,10 @@ function workspaceRoute(serverId: string, workspaceId: string, agentId: string |
   return agentId ? `${path}?open=${encodeURIComponent(`agent:${agentId}`)}` : path;
 }
 
+/** Visit time per workspace key. Replaces the visit order in MRU_KEY, which is read once to migrate. */
+const VISITS_KEY = "paseo-switcher:visits";
 const MRU_KEY = "paseo-switcher:mru";
+const COUNT_MESSAGES_KEY = "paseo-switcher:count-messages";
 const LIMIT_KEY = "paseo-switcher:limit";
 const LAYOUT_KEY = "paseo-switcher:layout";
 const SHORTCUT_KEY = "paseo-switcher:shortcut";
@@ -79,6 +89,8 @@ const REFRESH_MS = 2000;
  */
 const QUIET_AFTER_SWITCH_MS = 2000;
 const WORKSPACES_STALE_MS = 5000;
+/** While the switcher is closed, the agent list is refreshed in idle time this often, so messages count. */
+const AGENTS_BACKGROUND_MS = 15000;
 const MAX_THUMBS = 12;
 
 const CARD_MAX = 240;
@@ -116,6 +128,8 @@ export interface Switcher {
   setShortcut(shortcut: Shortcut): void;
   getIncludeBackground(): boolean;
   setIncludeBackground(include: boolean): void;
+  getCountMessages(): boolean;
+  setCountMessages(count: boolean): void;
   /** Called after the shortcut changes, so labels that name it can follow. Returns an unsubscribe. */
   onShortcutChange(listener: (shortcut: Shortcut) => void): () => void;
   dispose(): void;
@@ -134,6 +148,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     setShortcut() {},
     getIncludeBackground: () => DEFAULT_INCLUDE_BACKGROUND,
     setIncludeBackground() {},
+    getCountMessages: () => DEFAULT_COUNT_MESSAGES,
+    setCountMessages() {},
     onShortcutChange: () => () => {},
     dispose() {},
   };
@@ -146,7 +162,11 @@ export function installSwitcher(paseo: Paseo): Switcher {
   const shortcutListeners = new Set<(shortcut: Shortcut) => void>();
   const keys = claimKeys(() => open, () => shortcut);
 
-  let mru: string[] = readJson(MRU_KEY, []).filter((v: unknown) => typeof v === "string");
+  let visits: Visits = parseVisits(readJson(VISITS_KEY, null)) ?? migrateMru(readJson(MRU_KEY, []), Date.now());
+  /** Visited workspace keys, most recent first; derived from `visits`. */
+  let mru: string[] = recentKeys(visits);
+  /** Count a message you sent in a workspace as a visit to it. */
+  let countMessages = parseCountMessages(readJson(COUNT_MESSAGES_KEY, DEFAULT_COUNT_MESSAGES));
   let limit = clampLimit(readJson(LIMIT_KEY, DEFAULT_LIMIT));
   /** The list layout has no thumbnails, so it skips all background snapshot work. */
   let layout = parseLayout(readJson(LAYOUT_KEY, DEFAULT_LAYOUT));
@@ -222,16 +242,24 @@ export function installSwitcher(paseo: Paseo): Switcher {
     return key ? splitKey(key).serverId : homeServer;
   }
 
+  function setVisits(next: Visits) {
+    if (next === visits) return;
+    visits = next;
+    mru = recentKeys(visits);
+    writeJson(VISITS_KEY, visits);
+  }
+
   function syncRoute() {
     const key = currentKey();
     if (!key || key === lastKey) return;
     lastKey = key;
-    const next = touch(mru, key);
-    if (next !== mru) {
-      mru = next;
-      writeJson(MRU_KEY, mru);
-    }
+    setVisits(recordVisit(visits, key, Date.now()));
     watchPane();
+  }
+
+  /** Folds the loaded agents' last messages into the visit times, when that setting is on. */
+  function countMessageVisits() {
+    if (countMessages) setVisits(mergeMessageVisits(visits, serverId(), agents));
   }
 
   /** Remembers which agent tab is active in the current workspace. One query inside the pane. */
@@ -332,10 +360,16 @@ export function installSwitcher(paseo: Paseo): Switcher {
         const list: AgentInfo[] = [];
         for (const { agent } of result.entries) {
           if (agent.archivedAt || agent.internal) continue;
-          list.push({ id: agent.id, workspaceId: agent.workspaceId ?? null, activityAt: latest(agent.updatedAt, agent.lastUserMessageAt) });
+          list.push({
+            id: agent.id,
+            workspaceId: agent.workspaceId ?? null,
+            activityAt: latest(agent.updatedAt, agent.lastUserMessageAt),
+            lastUserMessageAt: latest(agent.lastUserMessageAt) || null,
+          });
         }
         agents = { serverId: serverId(), list };
         agentsAt = Date.now();
+        countMessageVisits();
       })
       .catch(() => {
         // Keep the previous list; switching then uses only the remembered agent.
@@ -1134,7 +1168,17 @@ export function installSwitcher(paseo: Paseo): Switcher {
     if (layout === "strip" && dirty && !doc.hidden && Date.now() >= quietUntil) {
       whenIdle(() => win.requestAnimationFrame(() => setTimeout(snapshotIfDirty, 0)));
     }
+    // A message sent from a screen that isn't a workspace page (a bot chat, say) is only seen
+    // through the agent list, so keep it fresh while the switcher is closed.
+    if (countMessages && !open && !doc.hidden && Date.now() >= quietUntil && agentsStale(AGENTS_BACKGROUND_MS)) {
+      whenIdle(() => {
+        if (agentsStale(AGENTS_BACKGROUND_MS)) void loadAgents();
+      });
+    }
   }, REFRESH_MS);
+  function agentsStale(ms: number): boolean {
+    return !loadingAgents && Date.now() - agentsAt > ms;
+  }
   syncRoute();
   void loadWorkspaces();
   void loadAgents();
@@ -1168,6 +1212,15 @@ export function installSwitcher(paseo: Paseo): Switcher {
         for (const [id, w] of workspaces) if (value || !w.background) next.set(id, w);
         workspaces = next;
       }
+    },
+    getCountMessages: () => countMessages,
+    setCountMessages(next) {
+      const value = parseCountMessages(next);
+      if (value === countMessages) return;
+      countMessages = value;
+      writeJson(COUNT_MESSAGES_KEY, value);
+      // Turning it on counts the messages already loaded; turning it off keeps visits made so far.
+      countMessageVisits();
     },
     getShortcut: () => shortcut,
     setShortcut(next) {
