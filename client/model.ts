@@ -166,8 +166,9 @@ export function recordVisit(visits: Visits, key: string, at: number): Visits {
   return capVisits({ ...visits, [key]: at });
 }
 
-// Labels the paseo-bots plugin puts on chats it starts itself, and how long after creation its opening prompt lands.
-export const AUTOMATED_CHAT_LABELS = ["paseo-bots.routine", "paseo-bots.asked-by"];
+// Labels on chats started automatically, from the paseo-bots plugin and from the pr-review-watch launchd job,
+// and how long after creation the opening prompt lands.
+export const AUTOMATED_CHAT_LABELS = ["paseo-bots.routine", "paseo-bots.asked-by", "pr-review-watch"];
 export const OPENING_PROMPT_GRACE_MS = 10_000;
 
 /**

@@ -479,6 +479,20 @@ test("userMessageAt ignores the opening prompt of an asked-by chat", () => {
   assert.equal(userMessageAt(automated("paseo-bots.asked-by", 1000)), null);
 });
 
+test("userMessageAt ignores the opening prompt of a pr-review-watch chat", () => {
+  assert.equal(
+    userMessageAt({ createdAt: T0, lastUserMessageAt: T0 + 1000, labels: { "pr-review-watch": "org/repo#12" } }),
+    null,
+  );
+});
+
+test("userMessageAt counts a later reply in a pr-review-watch chat", () => {
+  assert.equal(
+    userMessageAt({ createdAt: T0, lastUserMessageAt: T0 + 60_000, labels: { "pr-review-watch": "org/repo#12" } }),
+    T0 + 60_000,
+  );
+});
+
 test("userMessageAt counts a later reply in an automated chat", () => {
   assert.equal(userMessageAt(automated("paseo-bots.routine", 60_000)), T0 + 60_000);
 });
