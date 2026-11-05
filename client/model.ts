@@ -23,17 +23,19 @@ export interface PullRequestInfo {
   review: "approved" | "changes_requested" | "pending" | null;
 }
 
-export type Shortcut = "ctrl-backquote" | "ctrl-tab" | "alt-tab";
-export const DEFAULT_SHORTCUT: Shortcut = "ctrl-backquote";
+export type Shortcut = "cmd-backquote" | "ctrl-backquote" | "ctrl-tab" | "alt-tab";
+export const DEFAULT_SHORTCUT: Shortcut = "cmd-backquote";
 
 /**
- * Each shortcut is a held modifier plus a physical key. Matching uses `code`, so Ctrl+` works on
+ * Each shortcut is a held modifier plus a physical key. Matching uses `code`, so Cmd+` works on
  * every keyboard layout and Option never turns Tab or ` into another character on macOS.
+ * "ctrl-backquote" stays valid so a saved setting still parses, but Paseo binds Ctrl+` itself.
  */
 export const SHORTCUTS: Record<
   Shortcut,
-  { label: string; code: string; modifier: "Control" | "Alt"; modifierLabel: string; keyLabel: string }
+  { label: string; code: string; modifier: "Control" | "Alt" | "Meta"; modifierLabel: string; keyLabel: string }
 > = {
+  "cmd-backquote": { label: "Cmd+`", code: "Backquote", modifier: "Meta", modifierLabel: "Cmd", keyLabel: "`" },
   "ctrl-backquote": { label: "Ctrl+`", code: "Backquote", modifier: "Control", modifierLabel: "Ctrl", keyLabel: "`" },
   "ctrl-tab": { label: "Ctrl+Tab", code: "Tab", modifier: "Control", modifierLabel: "Ctrl", keyLabel: "Tab" },
   "alt-tab": { label: "Option+Tab", code: "Tab", modifier: "Alt", modifierLabel: "Option", keyLabel: "Tab" },
@@ -50,11 +52,10 @@ interface KeyLike {
   metaKey: boolean;
 }
 
-/** The chosen modifier must be held alone (Shift is allowed and means "back"); Meta never is. */
+/** The chosen modifier must be held alone (Shift is allowed and means "back"). */
 export function matchesShortcut(shortcut: Shortcut, e: KeyLike): boolean {
   const { code, modifier } = SHORTCUTS[shortcut];
-  const wantCtrl = modifier === "Control";
-  return e.code === code && e.ctrlKey === wantCtrl && e.altKey === !wantCtrl && !e.metaKey;
+  return e.code === code && e.ctrlKey === (modifier === "Control") && e.altKey === (modifier === "Alt") && e.metaKey === (modifier === "Meta");
 }
 
 /** Releasing the chosen modifier commits the selection. */

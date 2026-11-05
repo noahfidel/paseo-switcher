@@ -1,21 +1,21 @@
-Arc-style workspace switching for the Paseo desktop app. Hold Ctrl and tap ` (the default shortcut) to step through your most recently used workspaces, shown as a list with each one's full name, branch, pull request and agent status. Release Ctrl to switch. A quick tap of the shortcut flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number.
+Arc-style workspace switching for the Paseo desktop app. Hold Cmd and tap ` (the default shortcut) to step through your most recently used workspaces, shown as a list with each one's full name, branch, pull request and agent status. Release Cmd to switch. A quick tap of the shortcut flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number.
 
 ## Keys
 
-- Ctrl+` / Ctrl+Shift+`: open the switcher and move forward or back (or Ctrl+Tab or Option+Tab, see the Shortcut setting)
-- Release the modifier (Ctrl, or Option for Option+Tab): switch to the selected workspace
+- Cmd+` / Cmd+Shift+`: open the switcher and move forward or back (or Ctrl+Tab, Option+Tab or Ctrl+`, see the Shortcut setting)
+- Release the modifier (Cmd, or Ctrl or Option for the other shortcuts): switch to the selected workspace
 - Arrow keys move, Enter switches, 1 to 9 jump straight to a row, Esc cancels
 - Typing filters all workspaces and keeps the switcher open until Enter or a click; Esc clears the filter
 - Hovering a row selects it and clicking switches to it
 
-The Command Center also has **Switch workspace (Ctrl+`)**, which (its title shows the shortcut you chose) opens the same switcher and waits for Enter or a click. Use it in a browser tab, where the browser keeps Ctrl+Tab for itself, or in a phone browser, where a tap switches.
+The Command Center also has **Switch workspace (Cmd+`)**, which (its title shows the shortcut you chose) opens the same switcher and waits for Enter or a click. Use it in a browser tab, where the browser keeps Ctrl+Tab for itself, or in a phone browser, where a tap switches.
 
 ## Settings
 
 **Settings → Plugins → Workspace Switcher** has three settings, saved on each device along with the visit order:
 
 - **Layout**: **List** (the default) shows each workspace's full name, project, branch, pull request and checks, diff stat, unpushed commits, and what its agent is doing and for how long. It takes no thumbnails, so the plugin does no background work at all. **Thumbnails** shows a row of cards with a preview of each workspace instead.
-- **Shortcut**: **Ctrl+`** (the default), **Ctrl+Tab** or **Option+Tab**. Hold the modifier, tap the key to open and step forward, add Shift to step back, and release the modifier to switch. Ctrl+Tab suits Windows and Linux; on macOS the system keeps Ctrl+Tab for switching apps, which is why the default is Ctrl+`. Keys are matched by physical position, so the shortcut works on any keyboard layout.
+- **Shortcut**: **Cmd+`** (the default), **Ctrl+Tab**, **Option+Tab** or **Ctrl+`**. Hold the modifier, tap the key to open and step forward, add Shift to step back, and release the modifier to switch. On macOS, turn off the system's "Move focus to next window" shortcut (System Settings → Keyboard → Keyboard Shortcuts → Keyboard), which otherwise keeps Cmd+` for itself. Ctrl+Tab suits Windows and Linux; macOS keeps it for switching apps. Paseo uses Ctrl+` itself (Toggle Explorer sidebar), so Ctrl+` is only for when you have unbound that. Keys are matched by physical position, so the shortcut works on any keyboard layout.
 - **Workspaces shown**: how many recent workspaces appear, 2 to 9, default 5.
 
 ## Cards

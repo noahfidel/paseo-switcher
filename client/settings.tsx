@@ -14,7 +14,11 @@ const LAYOUTS: Array<{ label: string; value: Layout }> = [
   { label: "Thumbnails", value: "strip" },
 ];
 
-const SHORTCUT_OPTIONS = (Object.keys(SHORTCUTS) as Shortcut[]).map((value) => ({ label: SHORTCUTS[value].label, value }));
+const SHORTCUT_OPTIONS = (Object.keys(SHORTCUTS) as Shortcut[]).map((value) => ({
+  // Paseo binds Ctrl+` itself (Toggle Explorer sidebar), so the two would fight over the key.
+  label: value === "ctrl-backquote" ? `${SHORTCUTS[value].label} (conflicts with Paseo)` : SHORTCUTS[value].label,
+  value,
+}));
 
 export function makeSettings(switcher: Switcher): ComponentType<PluginSurfaceProps> {
   return function SwitcherSettings() {

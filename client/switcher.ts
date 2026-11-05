@@ -988,7 +988,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
       return;
     }
     if (!open) return;
-    if (key === "Control" || key === "Shift" || key === "Alt") return;
+    if (key === "Control" || key === "Shift" || key === "Alt" || key === "Meta") return;
     stop(e);
     if (key === "Escape") {
       if (query) setQuery("");
@@ -1000,7 +1000,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     // Number keys jump to a card until a filter is typed; then they search pull request numbers too.
     else if (!query && /^[1-9]$/.test(key)) {
       if (Number(key) <= cards.length) commit(Number(key) - 1);
-    } else if (key.length === 1 && !e.metaKey && (query || key !== " ")) setQuery(query + key);
+    } else if (key.length === 1 && (!e.metaKey || SHORTCUTS[shortcut].modifier === "Meta") && (query || key !== " ")) setQuery(query + key);
   }
 
   function onKeyUp(e: any) {
