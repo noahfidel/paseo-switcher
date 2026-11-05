@@ -6,7 +6,13 @@ import {
   clampLimit,
   DEFAULT_LIMIT,
   filterCards,
+  isReleaseKey,
+  matchesShortcut,
   matchRanges,
+  parseShortcut,
+  SHORTCUTS,
+  DEFAULT_SHORTCUT,
+  type Shortcut,
   STATUS_LABEL,
   initialIndex,
   parseLayout,
@@ -158,4 +164,70 @@ test("match ranges are merged and sorted for highlighting", () => {
 
 test("attention reads as finished, the way Paseo shows it", () => {
   assert.equal(STATUS_LABEL.attention, "Finished");
+});
+
+const press = (code: string, mods: Partial<Record<"ctrlKey" | "altKey" | "metaKey" | "shiftKey", boolean>> = {}) => ({
+  code,
+  ctrlKey: false,
+  altKey: false,
+  metaKey: false,
+  shiftKey: false,
+  ...mods,
+});
+
+test("the shortcut defaults to Ctrl+` and falls back to it for unknown values", () => {
+  assert.equal(DEFAULT_SHORTCUT, "ctrl-backquote");
+  assert.equal(parseShortcut("ctrl-tab"), "ctrl-tab");
+  assert.equal(parseShortcut("alt-tab"), "alt-tab");
+  assert.equal(parseShortcut("ctrl-backquote"), "ctrl-backquote");
+  assert.equal(parseShortcut("meta-tab"), "ctrl-backquote");
+  assert.equal(parseShortcut(null), "ctrl-backquote");
+});
+
+test("Ctrl+` opens, advances and goes back, matched by code", () => {
+  assert.equal(matchesShortcut("ctrl-backquote", press("Backquote", { ctrlKey: true })), true);
+  assert.equal(matchesShortcut("ctrl-backquote", press("Backquote", { ctrlKey: true, shiftKey: true })), true);
+});
+
+test("Ctrl+Tab opens, advances and goes back", () => {
+  assert.equal(matchesShortcut("ctrl-tab", press("Tab", { ctrlKey: true })), true);
+  assert.equal(matchesShortcut("ctrl-tab", press("Tab", { ctrlKey: true, shiftKey: true })), true);
+});
+
+test("Option+Tab opens, advances and goes back", () => {
+  assert.equal(matchesShortcut("alt-tab", press("Tab", { altKey: true })), true);
+  assert.equal(matchesShortcut("alt-tab", press("Tab", { altKey: true, shiftKey: true })), true);
+});
+
+test("a combo that is not the chosen shortcut does nothing", () => {
+  const combos: Record<Shortcut, ReturnType<typeof press>> = {
+    "ctrl-backquote": press("Backquote", { ctrlKey: true }),
+    "ctrl-tab": press("Tab", { ctrlKey: true }),
+    "alt-tab": press("Tab", { altKey: true }),
+  };
+  for (const chosen of Object.keys(combos) as Shortcut[]) {
+    for (const other of Object.keys(combos) as Shortcut[]) {
+      assert.equal(matchesShortcut(chosen, combos[other]), chosen === other, `${chosen} vs ${other}`);
+    }
+  }
+});
+
+test("extra modifiers and bare keys never match", () => {
+  for (const shortcut of Object.keys(SHORTCUTS) as Shortcut[]) {
+    const { code, modifier } = SHORTCUTS[shortcut];
+    const mod = modifier === "Control" ? "ctrlKey" : "altKey";
+    const wrong = modifier === "Control" ? "altKey" : "ctrlKey";
+    assert.equal(matchesShortcut(shortcut, press(code)), false, "no modifier");
+    assert.equal(matchesShortcut(shortcut, press(code, { [mod]: true, metaKey: true })), false, "with Meta");
+    assert.equal(matchesShortcut(shortcut, press(code, { [mod]: true, [wrong]: true })), false, "with the other modifier");
+  }
+});
+
+test("releasing the chosen modifier, and only that one, switches", () => {
+  assert.equal(isReleaseKey("ctrl-backquote", "Control"), true);
+  assert.equal(isReleaseKey("ctrl-tab", "Control"), true);
+  assert.equal(isReleaseKey("alt-tab", "Alt"), true);
+  assert.equal(isReleaseKey("alt-tab", "Control"), false);
+  assert.equal(isReleaseKey("ctrl-tab", "Alt"), false);
+  assert.equal(isReleaseKey("ctrl-tab", "Tab"), false);
 });

@@ -5,7 +5,7 @@
 [![Paseo](https://img.shields.io/badge/Paseo-0.15-8A63D2?style=for-the-badge)](https://paseo.sh)
 [![License](https://img.shields.io/github/license/tomgrin10/paseo-switcher?style=for-the-badge&color=2563eb)](LICENSE)
 
-Arc-style Ctrl+Tab for Paseo workspaces. Hold Ctrl and tap Tab to step through your most recently used workspaces, release Ctrl to switch. A quick Ctrl+Tab flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number.
+Arc-style workspace switching for Paseo, on Ctrl+` by default (Ctrl+Tab and Option+Tab are in Settings). Hold Ctrl and tap ` to step through your most recently used workspaces, release Ctrl to switch. A quick tap flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number.
 
 ![Holding Ctrl+Tab to browse recent workspaces, releasing to switch, a quick tap back, then typing "search" to find a workspace](docs/media/switcher.gif)
 
@@ -38,23 +38,25 @@ paseo plugin install paseo-switcher
 
 | Keys | Action |
 | --- | --- |
-| Hold Ctrl, tap Tab | Open the switcher and move forward |
-| Ctrl+Shift+Tab | Move back |
+| Hold Ctrl, tap ` | Open the switcher and move forward |
+| Ctrl+Shift+` | Move back |
 | Release Ctrl | Switch to the selected workspace |
-| Quick Ctrl+Tab | Go straight back to the previous workspace |
+| Quick Ctrl+` | Go straight back to the previous workspace |
 | Arrows, Enter, 1–9 | Move, switch, or jump to a row |
 | Type | Filter all workspaces; the switcher then stays open until Enter or a click |
 | Esc | Clear the filter, then cancel |
 
+The keys above are for the default shortcut, **Ctrl+`**. Choose **Ctrl+Tab** or **Option+Tab** under Settings; the modifier you hold and release is then Ctrl or Option.
+
 While the switcher is open it takes every key, so typing never triggers a Paseo shortcut. Number keys jump to a row until you type a filter; after that they search pull request numbers too. Hovering a row selects it and clicking switches to it.
 
-The Command Center has **Switch workspace (Ctrl+Tab)** for browser tabs, where the browser keeps Ctrl+Tab for itself, and for the web UI on a phone, where a tap switches:
+The Command Center has **Switch workspace (…)**, titled with your chosen shortcut, for browser tabs, where the browser keeps Ctrl+Tab for itself, and for the web UI on a phone, where a tap switches:
 
 <img alt="The switcher in a phone browser, opened from the Command Center" src="docs/media/switcher-phone-dark.png" width="300">
 
-The switcher owns Ctrl+Tab and Ctrl+Shift+Tab. A Paseo shortcut bound to either one, such as Next tab, does not fire while the plugin is installed.
+The switcher owns the chosen shortcut and its Shift variant. A Paseo shortcut bound to either one, such as Next tab on Ctrl+Tab, does not fire while the plugin is installed.
 
-**Settings → Plugins → Workspace Switcher** sets the **Layout**, **List** (default) or **Thumbnails**, and how many recent workspaces appear, from 2 to 9 (default 5). Settings and the visit order are saved per device.
+**Settings → Plugins → Workspace Switcher** sets the **Shortcut** (**Ctrl+`** by default, **Ctrl+Tab** or **Option+Tab**; on macOS the system keeps Ctrl+Tab for switching apps), the **Layout**, **List** (default) or **Thumbnails**, and how many recent workspaces appear, from 2 to 9 (default 5). Settings and the visit order are saved per device.
 
 Status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
 

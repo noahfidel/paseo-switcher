@@ -4,20 +4,26 @@ import {
   buildCards,
   clampLimit,
   DEFAULT_LAYOUT,
+  DEFAULT_SHORTCUT,
   filterCards,
+  isReleaseKey,
+  matchesShortcut,
   matchRanges,
   MAX_LIMIT,
   STATUS_LABEL,
   DEFAULT_LIMIT,
   initialIndex,
   parseLayout,
+  parseShortcut,
   previousKey,
+  SHORTCUTS,
   splitKey,
   touch,
   workspaceKey,
   wrap,
   type Card,
   type Layout,
+  type Shortcut,
   type WorkspaceInfo,
 } from "./model";
 
@@ -38,6 +44,7 @@ const paneSelector = (key: string) => `[data-testid="workspace-deck-entry-${key}
 const MRU_KEY = "paseo-switcher:mru";
 const LIMIT_KEY = "paseo-switcher:limit";
 const LAYOUT_KEY = "paseo-switcher:layout";
+const SHORTCUT_KEY = "paseo-switcher:shortcut";
 const HOSTS_KEY = "@paseo:daemon-registry";
 /** A tap shorter than this switches without ever drawing the strip. */
 const SHOW_DELAY_MS = 110;
@@ -83,6 +90,10 @@ export interface Switcher {
   setLimit(limit: number): void;
   getLayout(): Layout;
   setLayout(layout: Layout): void;
+  getShortcut(): Shortcut;
+  setShortcut(shortcut: Shortcut): void;
+  /** Called after the shortcut changes, so labels that name it can follow. Returns an unsubscribe. */
+  onShortcutChange(listener: (shortcut: Shortcut) => void): () => void;
   dispose(): void;
 }
 
@@ -95,6 +106,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
     setLimit() {},
     getLayout: () => DEFAULT_LAYOUT,
     setLayout() {},
+    getShortcut: () => DEFAULT_SHORTCUT,
+    setShortcut() {},
+    onShortcutChange: () => () => {},
     dispose() {},
   };
   if (!doc || !win) return noop;
@@ -102,7 +116,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
   // Each connected host installs the plugin; only one switcher may own the keyboard.
   g.__paseoSwitcher?.dispose();
   // While the switcher is open it owns the keyboard, so typing to filter never fires a Paseo shortcut.
-  const keys = claimKeys(() => open);
+  let shortcut = parseShortcut(readJson(SHORTCUT_KEY, DEFAULT_SHORTCUT));
+  const shortcutListeners = new Set<(shortcut: Shortcut) => void>();
+  const keys = claimKeys(() => open, () => shortcut);
 
   let mru: string[] = readJson(MRU_KEY, []).filter((v: unknown) => typeof v === "string");
   let limit = clampLimit(readJson(LIMIT_KEY, DEFAULT_LIMIT));
@@ -113,7 +129,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   /** Rasterized thumbnails by workspace key, oldest first. Each canvas records its theme. */
   const thumbs = new Map<string, Node>();
 
-  // Switcher state. `open` is true from the first Ctrl+Tab; `root` exists only once drawn.
+  // Switcher state. `open` is true from the first press of the shortcut; `root` exists only once drawn.
   let open = false;
   let mode: Mode = "hold";
   let cards: Card[] = [];
@@ -670,7 +686,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     if (cards.length) cards.forEach((card, i) => panel.appendChild(list ? renderRow(card, i, at) : renderCard(card, i)));
     else panel.appendChild(emptyState());
     if (!query && cards.length === 1 && cards[0].key === currentKey()) {
-      const note = touchScreen() ? "Open another workspace to switch between them here." : "Open another workspace, then Ctrl+Tab flips between the two.";
+      const note = touchScreen() ? "Open another workspace to switch between them here." : `Open another workspace, then ${SHORTCUTS[shortcut].label} flips between the two.`;
       panel.appendChild(el("div", "pws-note", note));
     }
     // One sheet: the query, when there is one, is its header, so typing never moves the rows.
@@ -743,8 +759,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
       keys(arrows, "move");
       keys(["Esc"], "clear");
     } else if (mode === "hold") {
-      keys(["Ctrl"], "release to switch");
-      keys(["Shift", "Tab"], "back");
+      keys([SHORTCUTS[shortcut].modifierLabel], "release to switch");
+      keys(["Shift", SHORTCUTS[shortcut].keyLabel], "back");
       keys(["Esc"], "cancel");
       bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
     } else {
@@ -965,14 +981,14 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function onKeyDown(e: any) {
     if (e.isComposing) return;
     const key = keys.realKey(e);
-    if (key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (matchesShortcut(shortcut, { code: keys.realCode(e), ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey })) {
       stop(e);
       if (open) move(e.shiftKey ? -1 : 1);
       else begin("hold", e.shiftKey ? -1 : 1);
       return;
     }
     if (!open) return;
-    if (key === "Control" || key === "Shift") return;
+    if (key === "Control" || key === "Shift" || key === "Alt") return;
     stop(e);
     if (key === "Escape") {
       if (query) setQuery("");
@@ -988,7 +1004,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   }
 
   function onKeyUp(e: any) {
-    if (open && mode === "hold" && keys.realKey(e) === "Control") {
+    if (open && mode === "hold" && isReleaseKey(shortcut, keys.realKey(e))) {
       stop(e);
       commit();
     }
@@ -1027,8 +1043,19 @@ export function installSwitcher(paseo: Paseo): Switcher {
       layout = parseLayout(next);
       writeJson(LAYOUT_KEY, layout);
     },
+    getShortcut: () => shortcut,
+    setShortcut(next) {
+      shortcut = parseShortcut(next);
+      writeJson(SHORTCUT_KEY, shortcut);
+      for (const listener of shortcutListeners) listener(shortcut);
+    },
+    onShortcutChange(listener) {
+      shortcutListeners.add(listener);
+      return () => void shortcutListeners.delete(listener);
+    },
     dispose() {
       close();
+      shortcutListeners.clear();
       clearInterval(routeTimer);
       clearInterval(refreshTimer);
       observer.disconnect();
@@ -1051,26 +1078,26 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
 /**
  * Paseo's shortcut engine listens on the window before any plugin loads, so a Paseo shortcut bound
- * to Ctrl+Tab or Ctrl+Shift+Tab (Next tab, say) would act on the same press as the switcher. The
+ * to the chosen shortcut or its Shift variant (Next tab, say, on Ctrl+Tab) would act on the same press as the switcher. The
  * switcher owns those keys, and every key while it is open (typing "k" with Ctrl held would
  * otherwise open the Command Center): everyone else reads them as an unidentified key with no
  * code, which matches no shortcut, while the switcher reads the real key through `realKey`.
  */
-function claimKeys(isOpen: () => boolean): { realKey(e: any): string; release(): void } {
+function claimKeys(isOpen: () => boolean, shortcut: () => Shortcut): { realKey(e: any): string; realCode(e: any): string; release(): void } {
   const proto = g.KeyboardEvent?.prototype;
   const get = (name: string) => (proto ? Object.getOwnPropertyDescriptor(proto, name) : undefined);
   const key = get("key");
   const code = get("code");
   const [keyOf, codeOf, ctrlOf, metaOf, altOf] = [key, code, get("ctrlKey"), get("metaKey"), get("altKey")].map((d) => d?.get);
   if (!keyOf || !codeOf || !ctrlOf || !metaOf || !altOf || !key?.configurable || !code?.configurable) {
-    return { realKey: (e) => e.key, release() {} };
+    return { realKey: (e) => e.key, realCode: (e) => e.code, release() {} };
   }
   // Modifier presses stay visible, so anything tracking held modifiers never gets stuck.
   const MODIFIERS = new Set(["Control", "Shift", "Alt", "Meta"]);
   const claimed = (e: any) => {
     const k = keyOf.call(e);
     if (isOpen()) return !MODIFIERS.has(k);
-    return k === "Tab" && ctrlOf.call(e) && !metaOf.call(e) && !altOf.call(e);
+    return matchesShortcut(shortcut(), { code: codeOf.call(e), ctrlKey: ctrlOf.call(e), altKey: altOf.call(e), metaKey: metaOf.call(e) });
   };
   const hiddenKey = function (this: any) {
     return claimed(this) ? "Unidentified" : keyOf.call(this);
@@ -1082,6 +1109,7 @@ function claimKeys(isOpen: () => boolean): { realKey(e: any): string; release():
   Object.defineProperty(proto, "code", { ...code, get: hiddenCode });
   return {
     realKey: (e) => keyOf.call(e),
+    realCode: (e) => codeOf.call(e),
     release() {
       // Restore only our own getters, in case something else wrapped them since.
       if (get("key")?.get === hiddenKey) Object.defineProperty(proto, "key", key);

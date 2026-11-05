@@ -1,7 +1,7 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { SettingsCard, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { useState, type ComponentType } from "react";
-import { MAX_LIMIT, MIN_LIMIT, type Layout } from "./model";
+import { MAX_LIMIT, MIN_LIMIT, SHORTCUTS, type Layout, type Shortcut } from "./model";
 import type { Switcher } from "./switcher";
 
 const OPTIONS = Array.from({ length: MAX_LIMIT - MIN_LIMIT + 1 }, (_, i) => {
@@ -14,10 +14,13 @@ const LAYOUTS: Array<{ label: string; value: Layout }> = [
   { label: "Thumbnails", value: "strip" },
 ];
 
+const SHORTCUT_OPTIONS = (Object.keys(SHORTCUTS) as Shortcut[]).map((value) => ({ label: SHORTCUTS[value].label, value }));
+
 export function makeSettings(switcher: Switcher): ComponentType<PluginSurfaceProps> {
   return function SwitcherSettings() {
     const [limit, setLimit] = useState(String(switcher.getLimit()));
     const [layout, setLayout] = useState<Layout>(switcher.getLayout());
+    const [shortcut, setShortcut] = useState<Shortcut>(switcher.getShortcut());
     return (
       <SettingsSection title="Switcher">
         <SettingsCard>
@@ -32,8 +35,18 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
             }}
           />
           <SettingsSelect
+            label="Shortcut"
+            hint="Hold the modifier and tap the key to open and step through workspaces; Shift goes back and releasing the modifier switches. Pick one your system does not already use."
+            value={shortcut}
+            options={SHORTCUT_OPTIONS}
+            onValueChange={(value) => {
+              switcher.setShortcut(value as Shortcut);
+              setShortcut(switcher.getShortcut());
+            }}
+          />
+          <SettingsSelect
             label="Workspaces shown"
-            hint="How many recent workspaces Ctrl+Tab shows. Type while it is open to search all of them."
+            hint="How many recent workspaces the shortcut shows. Type while it is open to search all of them."
             value={limit}
             options={OPTIONS}
             onValueChange={(value) => {

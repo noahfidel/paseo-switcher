@@ -23,6 +23,45 @@ export interface PullRequestInfo {
   review: "approved" | "changes_requested" | "pending" | null;
 }
 
+export type Shortcut = "ctrl-backquote" | "ctrl-tab" | "alt-tab";
+export const DEFAULT_SHORTCUT: Shortcut = "ctrl-backquote";
+
+/**
+ * Each shortcut is a held modifier plus a physical key. Matching uses `code`, so Ctrl+` works on
+ * every keyboard layout and Option never turns Tab or ` into another character on macOS.
+ */
+export const SHORTCUTS: Record<
+  Shortcut,
+  { label: string; code: string; modifier: "Control" | "Alt"; modifierLabel: string; keyLabel: string }
+> = {
+  "ctrl-backquote": { label: "Ctrl+`", code: "Backquote", modifier: "Control", modifierLabel: "Ctrl", keyLabel: "`" },
+  "ctrl-tab": { label: "Ctrl+Tab", code: "Tab", modifier: "Control", modifierLabel: "Ctrl", keyLabel: "Tab" },
+  "alt-tab": { label: "Option+Tab", code: "Tab", modifier: "Alt", modifierLabel: "Option", keyLabel: "Tab" },
+};
+
+export function parseShortcut(value: unknown): Shortcut {
+  return typeof value === "string" && Object.hasOwn(SHORTCUTS, value) ? (value as Shortcut) : DEFAULT_SHORTCUT;
+}
+
+interface KeyLike {
+  code: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+}
+
+/** The chosen modifier must be held alone (Shift is allowed and means "back"); Meta never is. */
+export function matchesShortcut(shortcut: Shortcut, e: KeyLike): boolean {
+  const { code, modifier } = SHORTCUTS[shortcut];
+  const wantCtrl = modifier === "Control";
+  return e.code === code && e.ctrlKey === wantCtrl && e.altKey === !wantCtrl && !e.metaKey;
+}
+
+/** Releasing the chosen modifier commits the selection. */
+export function isReleaseKey(shortcut: Shortcut, key: string): boolean {
+  return key === SHORTCUTS[shortcut].modifier;
+}
+
 export type Layout = "strip" | "list";
 export const DEFAULT_LAYOUT: Layout = "list";
 
