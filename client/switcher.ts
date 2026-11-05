@@ -9,6 +9,7 @@ import {
   rememberAgent,
   type AgentInfo,
   clampLimit,
+  isAutomatedChat,
   DEFAULT_LAYOUT,
   DEFAULT_INCLUDE_BACKGROUND,
   DEFAULT_COUNT_MESSAGES,
@@ -273,9 +274,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
       const id = agentIdFromTabTestId(tab.getAttribute("data-testid"));
       if (id) selected.push(id);
     }
-    const agentId = pickFocusedAgent(selected, agentMemory[key]);
+    const agentId = pickFocusedAgent(selected, agentMemory[key]?.agentId);
     if (!agentId) return;
-    const next = rememberAgent(agentMemory, key, agentId);
+    const next = rememberAgent(agentMemory, key, agentId, Date.now());
     if (next === agentMemory) return;
     agentMemory = next;
     writeJson(AGENTS_KEY, agentMemory);
@@ -370,6 +371,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
               createdAt: latest(agent.createdAt),
               labels: agent.labels ?? {},
             }),
+            automated: isAutomatedChat(agent.labels ?? {}),
           });
         }
         agents = { serverId: serverId(), list };

@@ -3,6 +3,9 @@ import { test } from "node:test";
 import {
   agentIdFromTabTestId,
   agentToOpen,
+  REMEMBER_REFRESH_MS,
+  type AgentMemory,
+  type RememberedAgent,
   ago,
   buildCards,
   parseAgentMemory,
@@ -332,47 +335,92 @@ test("pickFocusedAgent keeps the remembered agent among several selected tabs, e
 
 test("rememberAgent records the latest agent, keeps the object when unchanged, and stays bounded", () => {
   const empty = {};
-  const one = rememberAgent(empty, "s:w1", "a1");
-  assert.deepEqual(one, { "s:w1": "a1" });
+  const one = rememberAgent(empty, "s:w1", "a1", 1000);
+  assert.deepEqual(one, { "s:w1": { agentId: "a1", at: 1000 } });
   assert.notEqual(one, empty);
-  assert.equal(rememberAgent(one, "s:w1", "a1"), one);
-  assert.deepEqual(rememberAgent(one, "s:w1", "a2"), { "s:w1": "a2" });
-  let many: Record<string, string> = {};
-  for (let i = 0; i < 250; i++) many = rememberAgent(many, `s:w${i}`, `a${i}`);
+  // Same agent, time barely moved: nothing to write.
+  assert.equal(rememberAgent(one, "s:w1", "a1", 1000 + REMEMBER_REFRESH_MS - 1), one);
+  // Same agent, stored time stale: the time is refreshed.
+  assert.deepEqual(rememberAgent(one, "s:w1", "a1", 1000 + REMEMBER_REFRESH_MS), { "s:w1": { agentId: "a1", at: 1000 + REMEMBER_REFRESH_MS } });
+  // A different agent is recorded at once.
+  assert.deepEqual(rememberAgent(one, "s:w1", "a2", 1001), { "s:w1": { agentId: "a2", at: 1001 } });
+  let many: AgentMemory = {};
+  for (let i = 0; i < 250; i++) many = rememberAgent(many, `s:w${i}`, `a${i}`, i);
   assert.equal(Object.keys(many).length, 200);
   assert.equal(many["s:w0"], undefined);
-  assert.equal(many["s:w249"], "a249");
+  assert.equal(many["s:w249"]?.agentId, "a249");
   // Updating an old entry moves it to the newest end, so it survives the next trim.
-  const touched = rememberAgent(many, "s:w50", "z");
+  const touched = rememberAgent(many, "s:w50", "z", 999);
   assert.equal(Object.keys(touched).at(-1), "s:w50");
 });
 
-test("parseAgentMemory keeps only string pairs", () => {
-  assert.deepEqual(parseAgentMemory({ "s:w": "a", bad: 3, also: null }), { "s:w": "a" });
+test("parseAgentMemory migrates the old agent-id format to time 0 and reads the new one", () => {
+  assert.deepEqual(parseAgentMemory({ "s:w": "a", bad: 3, also: null }), { "s:w": { agentId: "a", at: 0 } });
+  assert.deepEqual(parseAgentMemory({ "s:w": { agentId: "a", at: 50 }, "s:x": { agentId: "b" }, "s:y": { agentId: 3, at: 1 } }), {
+    "s:w": { agentId: "a", at: 50 },
+    "s:x": { agentId: "b", at: 0 },
+  });
   assert.deepEqual(parseAgentMemory(null), {});
   assert.deepEqual(parseAgentMemory(["x"]), {});
   assert.deepEqual(parseAgentMemory("nope"), {});
 });
 
-test("agentToOpen prefers the remembered agent while it still exists in that workspace", () => {
+const mem = (agentId: string, at: number): RememberedAgent => ({ agentId, at });
+
+test("agentToOpen opens the remembered tab when it is newer than your last message", () => {
   const agents: AgentInfo[] = [
-    { id: "old", workspaceId: "w1", activityAt: 100 },
-    { id: "new", workspaceId: "w1", activityAt: 300 },
-    { id: "other", workspaceId: "w2", activityAt: 900 },
+    { id: "focused", workspaceId: "w1", activityAt: 100, lastUserMessageAt: 400 },
+    { id: "messaged", workspaceId: "w1", activityAt: 300, lastUserMessageAt: 500 },
+    { id: "other", workspaceId: "w2", activityAt: 900, lastUserMessageAt: 900 },
   ];
-  assert.equal(agentToOpen("w1", "old", agents), "old");
+  assert.equal(agentToOpen("w1", mem("focused", 600), agents), "focused");
   // Unknown agent list: trust what was remembered.
-  assert.equal(agentToOpen("w1", "old", null), "old");
-  // Archived or moved away: fall back to the most recently active agent there.
-  assert.equal(agentToOpen("w1", "gone", agents), "new");
-  assert.equal(agentToOpen("w1", "other", agents), "new");
-  // Nothing remembered: most recently active.
-  assert.equal(agentToOpen("w1", undefined, agents), "new");
-  // The list is one page: a workspace with none of its agents on it says nothing, so trust memory.
-  assert.equal(agentToOpen("w3", "kept", agents), "kept");
-  // Nothing at all: keep Paseo's default.
-  assert.equal(agentToOpen("w3", undefined, agents), null);
+  assert.equal(agentToOpen("w1", mem("focused", 600), null), "focused");
+  // A list with none of this workspace's agents says nothing, so trust memory.
+  assert.equal(agentToOpen("w3", mem("kept", 1), agents), "kept");
+});
+
+test("agentToOpen opens the chat you messaged when that is newer than the remembered tab", () => {
+  const agents: AgentInfo[] = [
+    { id: "focused", workspaceId: "w1", activityAt: 100, lastUserMessageAt: 200 },
+    // A bot chat used from the Bots screen after the workspace page was left.
+    { id: "bot", workspaceId: "w1", activityAt: 300, lastUserMessageAt: 700, automated: true },
+    { id: "older", workspaceId: "w1", activityAt: 300, lastUserMessageAt: 650 },
+  ];
+  assert.equal(agentToOpen("w1", mem("focused", 600), agents), "bot");
+  // Old-format memory (time 0) loses to any message.
+  assert.equal(agentToOpen("w1", mem("focused", 0), agents), "bot");
+  // The message newest overall wins among several.
+  assert.equal(agentToOpen("w1", undefined, agents), "bot");
+});
+
+test("agentToOpen ignores a remembered agent that is gone", () => {
+  const agents: AgentInfo[] = [
+    { id: "a", workspaceId: "w1", activityAt: 100, lastUserMessageAt: 200 },
+    { id: "other", workspaceId: "w2", activityAt: 900, lastUserMessageAt: 900 },
+  ];
+  // Archived, or moved to another workspace.
+  assert.equal(agentToOpen("w1", mem("gone", 9999), agents), "a");
+  assert.equal(agentToOpen("w1", mem("other", 9999), agents), "a");
+});
+
+test("agentToOpen never falls back to an automated chat", () => {
+  const agents: AgentInfo[] = [
+    { id: "routine", workspaceId: "w1", activityAt: 900, automated: true },
+    { id: "plain-old", workspaceId: "w1", activityAt: 100 },
+    { id: "plain-new", workspaceId: "w1", activityAt: 300 },
+  ];
+  assert.equal(agentToOpen("w1", undefined, agents), "plain-new");
+  assert.equal(agentToOpen("w1", mem("gone", 5), agents), "plain-new");
+  // Only automated chats listed: fall through to the remembered tab, else Paseo's default.
+  const onlyBots: AgentInfo[] = [{ id: "routine", workspaceId: "w1", activityAt: 900, automated: true }];
+  assert.equal(agentToOpen("w1", mem("gone", 5), onlyBots), "gone");
+  assert.equal(agentToOpen("w1", undefined, onlyBots), null);
+});
+
+test("agentToOpen returns null when nothing is available", () => {
   assert.equal(agentToOpen("w3", undefined, null), null);
+  assert.equal(agentToOpen("w3", undefined, [{ id: "x", workspaceId: "w2", activityAt: 1 }]), null);
 });
 
 // ---- visit times and messages as visits ---------------------------------------------------------

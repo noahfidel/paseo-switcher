@@ -20,7 +20,7 @@ The Command Center also has **Switch workspace (Cmd+`)**, which (its title shows
 - **Include background workspaces**: on by default. Also lists workspaces hidden from the sidebar, marked "hidden". Your sidebar is unchanged. Hosts that do not support background workspaces keep the sidebar's list.
 - **Count chats you message as visits**: on by default. A workspace you send a message to ranks as if you had just opened it, even when you messaged it from a screen outside it, such as a bot chat. Chats a paseo-bots routine or another bot starts do not count until you reply to them. Off, only opening a workspace counts. Hidden workspaces still appear only with **Include background workspaces** on.
 
-Switching to a workspace that has no sidebar row (a hidden one, or one in a collapsed project) reopens the chat you last had open there, or its most recently active chat if you have not been there yet. Workspaces in the sidebar open the way a sidebar click does.
+Switching to a workspace that has no sidebar row (a hidden one, or one in a collapsed project) reopens whichever is newer: the chat you last had open there, or the chat you last sent a message to (including one used from the Bots screen). If neither exists, it opens the most recently active chat that was not started by a routine, ask or PR review watcher. Workspaces in the sidebar open the way a sidebar click does.
 
 ## Cards
 

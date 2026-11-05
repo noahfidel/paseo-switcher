@@ -343,7 +343,24 @@ export interface AgentInfo {
   activityAt: number;
   /** When you last sent this agent a message (epoch ms); null when never. */
   lastUserMessageAt?: number | null;
+  /** Started automatically (routine, ask, pr-review-watch); never picked as a fallback. */
+  automated?: boolean;
 }
+
+/** The agent tab last seen focused in a workspace, and when (epoch ms; 0 for data saved before times were kept). */
+export interface RememberedAgent {
+  agentId: string;
+  at: number;
+}
+export type AgentMemory = Record<string, RememberedAgent>;
+
+/** Whether a chat carries any of the labels automated chats are started with. */
+export function isAutomatedChat(labels: Record<string, string>): boolean {
+  return AUTOMATED_CHAT_LABELS.some((label) => label in labels);
+}
+
+/** How often an unchanged focused agent has its time rewritten to storage. */
+export const REMEMBER_REFRESH_MS = 30_000;
 
 const AGENT_TAB_PREFIX = "workspace-tab-agent_";
 const MAX_REMEMBERED_AGENTS = 200;
@@ -363,37 +380,64 @@ export function pickFocusedAgent(selected: readonly string[], remembered: string
   return selected[0] ?? null;
 }
 
-/** Records `agentId` as the last focused agent of a workspace. Newest last; oldest dropped past the cap. */
-export function rememberAgent(memory: Record<string, string>, key: string, agentId: string): Record<string, string> {
+/**
+ * Records `agentId` as the agent focused in a workspace at `now`. Newest last; oldest dropped past
+ * the cap. Returns `memory` itself (nothing to write) while the same agent stays focused and its
+ * stored time is under REMEMBER_REFRESH_MS old.
+ */
+export function rememberAgent(memory: AgentMemory, key: string, agentId: string, now: number): AgentMemory {
   const keys = Object.keys(memory);
-  if (memory[key] === agentId && keys[keys.length - 1] === key) return memory;
-  const next: Record<string, string> = {};
+  const current = memory[key];
+  if (current && current.agentId === agentId && keys[keys.length - 1] === key && now - current.at < REMEMBER_REFRESH_MS) {
+    return memory;
+  }
+  const next: AgentMemory = {};
   for (const k of keys.slice(-(MAX_REMEMBERED_AGENTS - 1))) if (k !== key) next[k] = memory[k];
-  next[key] = agentId;
+  next[key] = { agentId, at: now };
   return next;
 }
 
-export function parseAgentMemory(value: unknown): Record<string, string> {
-  const memory: Record<string, string> = {};
+/** Reads stored memory. The older format, a bare agent id, becomes one with time 0. */
+export function parseAgentMemory(value: unknown): AgentMemory {
+  const memory: AgentMemory = {};
   if (!value || typeof value !== "object" || Array.isArray(value)) return memory;
-  for (const [k, v] of Object.entries(value)) if (typeof v === "string") memory[k] = v;
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string") memory[k] = { agentId: v, at: 0 };
+    else if (v && typeof v === "object" && typeof (v as RememberedAgent).agentId === "string") {
+      const at = (v as RememberedAgent).at;
+      memory[k] = { agentId: (v as RememberedAgent).agentId, at: typeof at === "number" && Number.isFinite(at) ? at : 0 };
+    }
+  }
   return memory;
 }
 
 /**
- * The agent tab to open when switching to a workspace: the one last focused there while it still
- * belongs to it, else the workspace's most recently active agent, else none (Paseo's default).
+ * The agent tab to open when switching to a workspace; the newest of two wins:
+ * the tab last seen focused there (while it is still listed for it) and the agent you last
+ * messaged there (which also catches chats used outside the workspace page, such as the Bots
+ * screen). With neither, the most recently active chat that is not automated, then the remembered
+ * tab even if unlisted, then none (Paseo's default).
  * The agent list is one page, so it only overrules memory when it lists agents of this workspace;
  * with no list, or none of the workspace's agents on it, the remembered agent is trusted.
  */
-export function agentToOpen(workspaceId: string, remembered: string | undefined, agents: readonly AgentInfo[] | null): string | null {
-  let latest: AgentInfo | null = null;
+export function agentToOpen(workspaceId: string, remembered: RememberedAgent | undefined, agents: readonly AgentInfo[] | null): string | null {
+  let rememberedListed = false;
+  let anyListed = false;
+  let messaged: AgentInfo | null = null;
+  let fallback: AgentInfo | null = null;
   for (const agent of agents ?? []) {
     if (agent.workspaceId !== workspaceId) continue;
-    if (agent.id === remembered) return remembered;
-    if (!latest || agent.activityAt > latest.activityAt) latest = agent;
+    anyListed = true;
+    if (agent.id === remembered?.agentId) rememberedListed = true;
+    const at = agent.lastUserMessageAt;
+    if (at && (!messaged || at > messaged.lastUserMessageAt!)) messaged = agent;
+    if (!agent.automated && (!fallback || agent.activityAt > fallback.activityAt)) fallback = agent;
   }
-  return latest?.id ?? remembered ?? null;
+  const rememberedUsable = remembered && (rememberedListed || !anyListed) ? remembered : null;
+  if (rememberedUsable && messaged) return messaged.lastUserMessageAt! > rememberedUsable.at ? messaged.id : rememberedUsable.agentId;
+  if (rememberedUsable) return rememberedUsable.agentId;
+  if (messaged) return messaged.id;
+  return fallback?.id ?? remembered?.agentId ?? null;
 }
 
 /** Whether a workspace belongs in the switcher: never one being archived; background ones only when included. */

@@ -58,7 +58,7 @@ The switcher owns the chosen shortcut and its Shift variant. A Paseo shortcut bo
 
 **Settings → Plugins → Workspace Switcher** sets the **Shortcut** (**Cmd+`** by default, **Ctrl+Tab**, **Option+Tab** or **Ctrl+`**; on macOS the system keeps Ctrl+Tab for switching apps and Cmd+` for "Move focus to next window", which must be turned off), the **Layout**, **List** (default) or **Thumbnails**, how many recent workspaces appear, from 2 to 9 (default 5), whether to **Include background workspaces** (on by default; lists workspaces hidden from the sidebar, which stays unchanged), and whether to **Count chats you message as visits** (on by default; a workspace you send a message to ranks as if you had just opened it, even when you messaged it from a screen outside it, such as a bot chat; chats a paseo-bots routine or another bot starts do not count until you reply). Settings and the visit history are saved per device.
 
-Switching to a workspace with no sidebar row (a hidden one, or one in a collapsed project) reopens the chat you last had open there, or its most recently active chat. Workspaces in the sidebar open the way a sidebar click does.
+Switching to a workspace with no sidebar row (a hidden one, or one in a collapsed project) reopens whichever is newer: the chat you last had open there, or the chat you last messaged (including one used from the Bots screen). Failing both, it opens the most recently active chat that was not started automatically (routines, asks, PR review watchers). Workspaces in the sidebar open the way a sidebar click does.
 
 Status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
 
