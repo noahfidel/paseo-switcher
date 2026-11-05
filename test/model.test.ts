@@ -5,6 +5,9 @@ import {
   buildCards,
   clampLimit,
   DEFAULT_LIMIT,
+  filterCards,
+  matchRanges,
+  STATUS_LABEL,
   initialIndex,
   parseLayout,
   previousKey,
@@ -111,4 +114,48 @@ test("ago gives compact ages", () => {
   assert.equal(ago(now - 5 * 60_000, now), "5m");
   assert.equal(ago(now - 3 * 3_600_000, now), "3h");
   assert.equal(ago(now - 50 * 3_600_000, now), "2d");
+});
+
+test("filter matches name, project, branch and PR number, all words required", () => {
+  const ws = list(
+    { ...info("a", 1), name: "Rate limit the public API", project: "api", branch: "rate-limits" },
+    { ...info("b", 2), name: "Upgrade to Postgres 17", project: "api", branch: "pg17", pr: { number: 455, state: "draft", checks: "failure", review: null } },
+    { ...info("c", 3), name: "Checkout redesign", project: "storefront", branch: "checkout-v2" },
+  );
+  const ids = (q: string) => filterCards(q, [], S, ws).map((c) => c.workspaceId);
+  assert.deepEqual(ids("api").sort(), ["a", "b"]);
+  assert.deepEqual(ids("455"), ["b"]);
+  assert.deepEqual(ids("#455"), ["b"]);
+  assert.deepEqual(ids("checkout v2"), ["c"]);
+  assert.deepEqual(ids("api postgres"), ["b"]);
+  assert.deepEqual(ids("zzz"), []);
+  assert.deepEqual(ids("   "), [], "a blank query filters nothing");
+});
+
+test("filter ranks word-start name matches first, then recency", () => {
+  const ws = list(
+    { ...info("a", 5), name: "Rate limit the public API", project: "api" },
+    { ...info("b", 9), name: "Grapefruit", project: "rate-service" },
+    { ...info("c", 1), name: "Rates page", project: "web" },
+  );
+  // "b" matches only through its project, so it ranks after both name matches.
+  assert.deepEqual(filterCards("rate", [`${S}:c`], S, ws).map((c) => c.workspaceId), ["c", "a", "b"]);
+  assert.deepEqual(filterCards("rate", [], S, ws).map((c) => c.workspaceId), ["a", "c", "b"]);
+});
+
+test("filter caps results at the number keys and needs a host and a list", () => {
+  const ws = list(...Array.from({ length: 12 }, (_, i) => ({ ...info(String(i), i), name: `Task ${i}` })));
+  assert.equal(filterCards("task", [], S, ws).length, 9);
+  assert.deepEqual(filterCards("task", [], null, ws), []);
+  assert.deepEqual(filterCards("task", [], S, null), []);
+});
+
+test("match ranges are merged and sorted for highlighting", () => {
+  assert.deepEqual(matchRanges("Rate limit the public API", "api rate"), [[0, 4], [22, 25]]);
+  assert.deepEqual(matchRanges("aaaa", "aa a"), [[0, 4]]);
+  assert.deepEqual(matchRanges("Docs", ""), []);
+});
+
+test("attention reads as finished, the way Paseo shows it", () => {
+  assert.equal(STATUS_LABEL.attention, "Finished");
 });

@@ -7,7 +7,11 @@ import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 
 export const PORT = Number(process.env.E2E_PORT ?? 8787);
-export const ORIGIN = `http://127.0.0.1:${PORT}`;
+/**
+ * Set E2E_ORIGIN to a daemon that serves its own web UI (an isolated test daemon with the web UI
+ * enabled, say) to use it directly instead of serving the installed CLI's copy on PORT.
+ */
+export const ORIGIN = process.env.E2E_ORIGIN ?? `http://127.0.0.1:${PORT}`;
 /** Written by the running daemon; local clients can authenticate with it instead of the password. */
 const CREDENTIAL = join(process.env.PASEO_HOME ?? join(homedir(), ".paseo"), "local-credential");
 
@@ -22,6 +26,17 @@ export function findWebUi() {
 }
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".ico": "image/x-icon", ".svg": "image/svg+xml", ".ttf": "font/ttf", ".woff2": "font/woff2" };
+/** Serves the web UI on PORT, unless E2E_ORIGIN points at a daemon that serves it. Resolves to a closable server. */
+export async function startWebUi() {
+  if (process.env.E2E_ORIGIN) return { close() {} };
+  return serve(findWebUi());
+}
+
+/** `paseo` arguments for the daemon under test: PASEO_HOME selects an isolated one. */
+export function paseoArgs(...args) {
+  return process.env.PASEO_HOME ? ["--home", process.env.PASEO_HOME, ...args] : args;
+}
+
 export function serve(root) {
   const server = createServer((req, res) => {
     const path = decodeURIComponent(new URL(req.url, ORIGIN).pathname);

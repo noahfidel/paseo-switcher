@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { authenticate, findWebUi, ORIGIN, PORT, serve } from "./browser.mjs";
+import { authenticate, ORIGIN, paseoArgs, PORT, startWebUi } from "./browser.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS = resolve(HERE, "../artifacts");
@@ -208,6 +208,75 @@ async function behavior(page, visited) {
   check("B16", "Losing window focus cancels", !s.open);
 }
 
+async function typeToFilter(page) {
+  const start = await cur(page);
+  await holdOpen(page);
+  const names = await page.$$eval(".pws-card", (els) => els.map((e) => e.getAttribute("aria-label")));
+  const target = names[3];
+  const fragment = target.toLowerCase().split(/\s+/).find((w) => w.length >= 4) ?? target.slice(0, 4).toLowerCase();
+  await page.keyboard.type(fragment, { delay: 30 });
+  await page.waitForTimeout(150);
+  let s = await strip(page);
+  const query = await page.locator(".pws-query-text").textContent().catch(() => null);
+  const labels = await page.$$eval(".pws-card", (els) => els.map((e) => e.getAttribute("aria-label")));
+  check("F1", "Typing while the switcher is open filters it", query === fragment && labels.includes(target), { query, labels });
+  await page.keyboard.up("Control");
+  await page.waitForTimeout(300);
+  const stillOpen = (await strip(page)).open;
+  const where = await cur(page);
+  check("F2", "After typing, releasing Ctrl keeps the switcher open", stillOpen && where === start, { stillOpen, where, start });
+  const top = (await strip(page)).cards[0];
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1500);
+  check("F3", "Enter switches to the top match", (await cur(page)) === top && !(await strip(page)).open, { now: await cur(page), want: top });
+
+  await page.evaluate(() => window.__paseoSwitcher.open());
+  await page.waitForTimeout(400);
+  await page.keyboard.type("zzqxv");
+  await page.waitForTimeout(150);
+  s = await strip(page);
+  const empty = await page.locator(".pws-empty-title").textContent().catch(() => null);
+  const here = await cur(page);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(500);
+  check("F4", "No match: an empty state, and Enter does nothing", s.cards.length === 0 && /No workspace matches/.test(empty ?? "") && (await cur(page)) === here && (await strip(page)).open, { empty });
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  const cleared = { strip: await strip(page), query: await page.locator(".pws-query").count() };
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  check("F5", "Esc clears the filter first, then closes", cleared.strip.open && cleared.query === 0 && cleared.strip.cards.length === 5 && !(await strip(page)).open, cleared);
+
+  // Each keystroke re-filters every workspace and redraws the results.
+  await page.evaluate(() => window.__paseoSwitcher.open());
+  await page.waitForTimeout(400);
+  const times = await page.evaluate(() => {
+    const out = [];
+    for (const key of "workspace") {
+      const t = performance.now();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      out.push(performance.now() - t);
+    }
+    return out;
+  });
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  check("F6", "Filtering a keystroke takes under 30 ms", Math.max(...times) < 30, { maxMs: +Math.max(...times).toFixed(1) });
+
+  // Holding Ctrl and typing "k" must filter, not open Paseo's Command Center (Ctrl+K).
+  const at = await cur(page);
+  await holdOpen(page);
+  await page.keyboard.type("kl");
+  await page.waitForTimeout(400);
+  const palette = await page.locator('input[placeholder^="Search commands"]').count();
+  const typed = await page.locator(".pws-query-text").textContent().catch(() => null);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await page.keyboard.up("Control");
+  await page.waitForTimeout(300);
+  check("F7", "While open, typed keys never reach Paseo's shortcuts", palette === 0 && typed === "kl" && (await cur(page)) === at && !(await strip(page)).open, { palette, typed });
+}
+
 async function commandCenterAndMouse(page) {
   await page.keyboard.press("Control+k");
   await page.waitForTimeout(700);
@@ -217,7 +286,7 @@ async function commandCenterAndMouse(page) {
   await page.waitForTimeout(500);
   const s = await strip(page);
   const hint = await page.locator(".pws-hint").textContent().catch(() => null);
-  check("B17", "Command Center opens the strip in click/Enter mode", s.open && /Enter to switch/.test(hint ?? ""), { s, hint });
+  check("B17", "Command Center opens the strip in click/Enter mode", s.open && /^Enter\s*switch/.test(hint ?? ""), { s, hint });
 
   const card = page.locator(".pws-card").nth(3);
   await card.hover();
@@ -660,7 +729,7 @@ async function paseoShortcuts(page) {
 
 async function reloadCleanup(page) {
   await boot(page);
-  execFileSync("paseo", ["plugin", "reload", "paseo-switcher"], { stdio: "ignore" });
+  execFileSync("paseo", paseoArgs("plugin", "reload", "paseo-switcher"), { stdio: "ignore" });
   await page.waitForTimeout(6000);
   const counts = await page.evaluate(() => ({
     hosts: document.querySelectorAll(".pws-host").length,
@@ -679,7 +748,7 @@ async function reloadCleanup(page) {
 
 async function main() {
   mkdirSync(ARTIFACTS, { recursive: true });
-  const server = await serve(findWebUi()).catch((e) => {
+  const server = await startWebUi().catch((e) => {
     throw new Error(`Cannot serve the web UI on ${ORIGIN} (${e.code ?? e.message}). Stop whatever uses port ${PORT}.`);
   });
   const browser = await chromium.launch({ headless: !ARGS.has("--headed") });
@@ -705,6 +774,7 @@ async function main() {
     await warmUp(page, visited);
 
     await behavior(page, visited);
+    await typeToFilter(page);
     await commandCenterAndMouse(page);
     await composer(page);
     await collapsedSidebar(page);

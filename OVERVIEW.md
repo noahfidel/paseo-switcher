@@ -1,13 +1,14 @@
-Arc-style workspace switching for the Paseo desktop app. Hold Ctrl and tap Tab to step through your most recently used workspaces, shown as a list with each one's full name, branch, pull request and agent status. Release Ctrl to switch. A quick Ctrl+Tab flips straight back to the previous workspace without drawing anything.
+Arc-style workspace switching for the Paseo desktop app. Hold Ctrl and tap Tab to step through your most recently used workspaces, shown as a list with each one's full name, branch, pull request and agent status. Release Ctrl to switch. A quick Ctrl+Tab flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number.
 
 ## Keys
 
 - Ctrl+Tab / Ctrl+Shift+Tab: open the switcher and move forward or back
 - Release Ctrl: switch to the selected workspace
-- Arrow keys move, Enter switches, 1 to 9 jump straight to a card, Esc cancels
-- Hovering a card selects it and clicking switches to it
+- Arrow keys move, Enter switches, 1 to 9 jump straight to a row, Esc cancels
+- Typing filters all workspaces and keeps the switcher open until Enter or a click; Esc clears the filter
+- Hovering a row selects it and clicking switches to it
 
-The Command Center also has **Switch workspace (Ctrl+Tab)**, which opens the same switcher and waits for Enter or a click. Use it in a browser tab, where the browser keeps Ctrl+Tab for itself.
+The Command Center also has **Switch workspace (Ctrl+Tab)**, which opens the same switcher and waits for Enter or a click. Use it in a browser tab, where the browser keeps Ctrl+Tab for itself, or in a phone browser, where a tap switches.
 
 ## Settings
 
@@ -18,9 +19,9 @@ The Command Center also has **Switch workspace (Ctrl+Tab)**, which opens the sam
 
 ## Cards
 
-The switcher shows your most recently visited workspaces. Until you have visited enough of them, the rest fill in by latest activity. Agent status is marked when an agent is running (blue), waiting on you (amber), or failed (red).
+The switcher shows your most recently visited workspaces. Until you have visited enough of them, the rest fill in by latest activity. Agent status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
 
-In the Thumbnails layout, thumbnails are small images of the workspace view, focused on the conversation. While you stay in a workspace, the plugin refreshes its thumbnail every couple of seconds when the browser is idle. It never does this work while you are switching. Thumbnails are kept in memory only, so a workspace you have not opened since the app started shows its project initial instead. Terminals, embedded previews and images loaded from the web appear blank in thumbnails.
+In the Thumbnails layout, thumbnails are small images of the workspace view, focused on the conversation. While you stay in a workspace, the plugin refreshes its thumbnail every couple of seconds when the browser is idle. It never does this work while you are switching. Thumbnails are kept in memory only, so a workspace you have not opened since the app started shows "No preview yet" instead. Terminals, embedded previews and images loaded from the web appear blank in thumbnails.
 
 ## Limits
 

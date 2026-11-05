@@ -27,6 +27,16 @@ The suite serves the web UI bundled with your installed Paseo CLI on `http://127
 
 4. **You need at least 7 workspaces** in the sidebar. The suite opens some of them and switches between them. It never sends messages, edits drafts, or changes workspaces. It does reset this plugin's own history and limit in the test browser, which is separate from your desktop app.
 
+### Against an isolated daemon
+
+To keep your own daemon and workspaces out of it, run a throwaway daemon with the web UI enabled (`paseo daemon run --home <dir>`, with `features.webUi.enabled` and plugins on in its `config.json`), install this checkout into it with `paseo --home <dir> plugin install .`, create at least 7 workspaces, and point the suite at it:
+
+```sh
+E2E_ORIGIN=http://127.0.0.1:<its port> PASEO_HOME=<dir> npm run e2e -- --reload
+```
+
+`E2E_ORIGIN` makes the suite use the web UI that daemon serves instead of serving one on 8787, and `PASEO_HOME` makes `--reload` reload the plugin there. A daemon without a password needs no credential.
+
 A Chromium build matching `playwright-core` must be in `~/.cache/ms-playwright`. If it's missing, install it with `npx playwright-core install chromium-headless-shell`.
 
 The run takes about four minutes. It prints a PASS/FAIL line per check, writes `test/artifacts/results.json`, saves screenshots to `test/artifacts/`, and exits non-zero if any check fails.
@@ -53,6 +63,18 @@ The run takes about four minutes. It prints a PASS/FAIL line per check, writes `
 | B17–B21 | Command Center entry: Enter or a click switches; hover selects; clicking the backdrop closes |
 | B22 | Ctrl+Tab in the message box switches and types nothing into it |
 | B23 | Switching works with the sidebar collapsed |
+
+**Type to filter (F)**
+
+| ID | Check |
+| --- | --- |
+| F1 | Typing while the switcher is open filters it |
+| F2 | After typing, releasing Ctrl keeps the switcher open |
+| F3 | Enter switches to the top match |
+| F4 | With no match, an empty state shows and Enter does nothing |
+| F5 | Esc clears the filter first, then closes |
+| F6 | Filtering a keystroke takes under 30 ms |
+| F7 | While open, typed keys never reach Paseo's shortcuts (Ctrl+K stays closed) |
 
 **Settings (S):** the limit defaults to 5, the settings screen saves a new value, the strip honors it, and it survives a reload.
 
@@ -108,4 +130,6 @@ P10 and P11 read the `pws:snapshot`, `pws:serialize` (with its `pws:xml` and `pw
 
 ## README media
 
-`npm run media` records `docs/images/switcher-list.gif` and `switcher-thumbnails.gif` from the real plugin, with the same setup as the end-to-end suite. It replaces every workspace name, detail and all conversation text with sample data before anything is drawn, and refuses to write a GIF if any card or row shows text that is not from its sample. It needs ffmpeg on `PATH`, or its path in `FFMPEG`.
+`npm run media` records `docs/media/switcher.gif` (list layout: browse, release, quick tap back, type to filter), `switcher-thumbnails.gif`, and stills of the list in dark and light, a filter, and the phone layout, from the real plugin.
+
+Run it against a throwaway daemon (see [Against an isolated daemon](#against-an-isolated-daemon)) whose workspaces are named as in `SAMPLES` in `test/e2e/media.mjs`. The script adds each sample's pull request, checks, review, diff stat and status to the daemon's messages inside the page, replaces the machine's host name, and refuses to write anything if a row or card shows a name that is not a sample. It encodes GIFs with ffmpeg (`PATH` or `FFMPEG`), or with sharp when `SHARP` names a directory that can require it.
