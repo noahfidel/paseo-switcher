@@ -6,7 +6,11 @@ import {
   clampLimit,
   DEFAULT_LIMIT,
   filterCards,
+  isBackgroundUnsupported,
   isReleaseKey,
+  listWithBackgroundFallback,
+  parseIncludeBackground,
+  shouldListWorkspace,
   matchesShortcut,
   matchRanges,
   parseShortcut,
@@ -251,4 +255,51 @@ test("releasing the chosen modifier, and only that one, switches", () => {
   assert.equal(isReleaseKey("alt-tab", "Control"), false);
   assert.equal(isReleaseKey("ctrl-tab", "Alt"), false);
   assert.equal(isReleaseKey("ctrl-tab", "Tab"), false);
+});
+
+test("shouldListWorkspace skips archiving workspaces, and background ones unless included", () => {
+  assert.equal(shouldListWorkspace({}, false), true);
+  assert.equal(shouldListWorkspace({ background: true }, false), false);
+  assert.equal(shouldListWorkspace({ background: true }, true), true);
+  assert.equal(shouldListWorkspace({ archivingAt: "2026-01-01" }, true), false);
+  assert.equal(shouldListWorkspace({ archivingAt: "2026-01-01", background: true }, true), false);
+});
+
+test("parseIncludeBackground defaults to on and only accepts booleans", () => {
+  assert.equal(parseIncludeBackground(undefined), true);
+  assert.equal(parseIncludeBackground(null), true);
+  assert.equal(parseIncludeBackground("no"), true);
+  assert.equal(parseIncludeBackground(true), true);
+  assert.equal(parseIncludeBackground(false), false);
+});
+
+test("isBackgroundUnsupported recognizes the host rejection by its message", () => {
+  assert.equal(isBackgroundUnsupported(new Error("Host does not support background workspaces")), true);
+  assert.equal(isBackgroundUnsupported("Unsupported: Background Workspaces discovery"), true);
+  assert.equal(isBackgroundUnsupported(new Error("network down")), false);
+  assert.equal(isBackgroundUnsupported(null), false);
+});
+
+test("listWithBackgroundFallback retries once without the filter when the host rejects it", async () => {
+  const calls: boolean[] = [];
+  const result = await listWithBackgroundFallback(true, async (includeBackground) => {
+    calls.push(includeBackground);
+    if (includeBackground) throw new Error("Inclusive discovery needs background workspaces support");
+    return "plain";
+  });
+  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(result, { value: "plain", includedBackground: false });
+});
+
+test("listWithBackgroundFallback asks once when included, and never asks when off", async () => {
+  const calls: boolean[] = [];
+  const ask = async (includeBackground: boolean) => (calls.push(includeBackground), "ok");
+  assert.deepEqual(await listWithBackgroundFallback(true, ask), { value: "ok", includedBackground: true });
+  assert.deepEqual(await listWithBackgroundFallback(false, ask), { value: "ok", includedBackground: false });
+  assert.deepEqual(calls, [true, false]);
+});
+
+test("listWithBackgroundFallback rethrows other errors and failures of the retry", async () => {
+  await assert.rejects(listWithBackgroundFallback(true, async () => { throw new Error("boom"); }), /boom/);
+  await assert.rejects(listWithBackgroundFallback(false, async () => { throw new Error("background workspaces"); }), /background/);
 });

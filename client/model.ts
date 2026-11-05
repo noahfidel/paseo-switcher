@@ -14,6 +14,8 @@ export interface WorkspaceInfo {
   pr?: PullRequestInfo | null;
   /** Commits not yet pushed to origin. */
   ahead?: number;
+  /** Hidden from the sidebar. */
+  background?: boolean;
 }
 
 export interface PullRequestInfo {
@@ -239,4 +241,39 @@ export function matchRanges(text: string, query: string): Array<[number, number]
     else merged.push([r[0], r[1]]);
   }
   return merged;
+}
+
+/** Whether a workspace belongs in the switcher: never one being archived; background ones only when included. */
+export function shouldListWorkspace(w: { archivingAt?: unknown; background?: boolean }, includeBackground: boolean): boolean {
+  if (w.archivingAt) return false;
+  return includeBackground || !w.background;
+}
+
+export const DEFAULT_INCLUDE_BACKGROUND = true;
+
+export function parseIncludeBackground(value: unknown): boolean {
+  return typeof value === "boolean" ? value : DEFAULT_INCLUDE_BACKGROUND;
+}
+
+/** Hosts without background support reject inclusive discovery with a message that names it. */
+export function isBackgroundUnsupported(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /background workspaces/i.test(message);
+}
+
+/**
+ * Asks for the list with background workspaces when wanted. If the host rejects that, asks once
+ * more without them, so the switcher keeps working on older hosts.
+ */
+export async function listWithBackgroundFallback<T>(
+  includeBackground: boolean,
+  list: (includeBackground: boolean) => Promise<T>,
+): Promise<{ value: T; includedBackground: boolean }> {
+  if (!includeBackground) return { value: await list(false), includedBackground: false };
+  try {
+    return { value: await list(true), includedBackground: true };
+  } catch (error) {
+    if (!isBackgroundUnsupported(error)) throw error;
+    return { value: await list(false), includedBackground: false };
+  }
 }

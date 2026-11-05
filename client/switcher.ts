@@ -4,8 +4,12 @@ import {
   buildCards,
   clampLimit,
   DEFAULT_LAYOUT,
+  DEFAULT_INCLUDE_BACKGROUND,
   DEFAULT_SHORTCUT,
   filterCards,
+  listWithBackgroundFallback,
+  parseIncludeBackground,
+  shouldListWorkspace,
   isReleaseKey,
   matchesShortcut,
   matchRanges,
@@ -45,6 +49,7 @@ const MRU_KEY = "paseo-switcher:mru";
 const LIMIT_KEY = "paseo-switcher:limit";
 const LAYOUT_KEY = "paseo-switcher:layout";
 const SHORTCUT_KEY = "paseo-switcher:shortcut";
+const BACKGROUND_KEY = "paseo-switcher:include-background";
 const HOSTS_KEY = "@paseo:daemon-registry";
 /** A tap shorter than this switches without ever drawing the strip. */
 const SHOW_DELAY_MS = 110;
@@ -92,6 +97,8 @@ export interface Switcher {
   setLayout(layout: Layout): void;
   getShortcut(): Shortcut;
   setShortcut(shortcut: Shortcut): void;
+  getIncludeBackground(): boolean;
+  setIncludeBackground(include: boolean): void;
   /** Called after the shortcut changes, so labels that name it can follow. Returns an unsubscribe. */
   onShortcutChange(listener: (shortcut: Shortcut) => void): () => void;
   dispose(): void;
@@ -108,6 +115,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     setLayout() {},
     getShortcut: () => DEFAULT_SHORTCUT,
     setShortcut() {},
+    getIncludeBackground: () => DEFAULT_INCLUDE_BACKGROUND,
+    setIncludeBackground() {},
     onShortcutChange: () => () => {},
     dispose() {},
   };
@@ -124,6 +133,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
   let limit = clampLimit(readJson(LIMIT_KEY, DEFAULT_LIMIT));
   /** The list layout has no thumbnails, so it skips all background snapshot work. */
   let layout = parseLayout(readJson(LAYOUT_KEY, DEFAULT_LAYOUT));
+  /** Also list workspaces hidden from the sidebar. */
+  let includeBackground = parseIncludeBackground(readJson(BACKGROUND_KEY, DEFAULT_INCLUDE_BACKGROUND));
   let workspaces: Map<string, WorkspaceInfo> | null = null;
   let workspacesAt = 0;
   /** Rasterized thumbnails by workspace key, oldest first. Each canvas records its theme. */
@@ -204,13 +215,23 @@ export function installSwitcher(paseo: Paseo): Switcher {
   // ---- workspace data -------------------------------------------------------------------------
 
   let loading: Promise<void> | null = null;
+  /** Bumped when the background setting changes, so a load that started before it is discarded. */
+  let generation = 0;
   function loadWorkspaces(): Promise<void> {
-    loading ??= paseo.workspaces
-      .list({ page: { limit: 200 }, sort: [{ key: "activity_at", direction: "desc" }] })
-      .then((result) => {
+    const mine = generation;
+    const wanted = includeBackground;
+    const promise: Promise<void> = (loading ??= listWithBackgroundFallback(wanted, (include) =>
+      paseo.workspaces.list({
+        page: { limit: 200 },
+        sort: [{ key: "activity_at", direction: "desc" }],
+        ...(include ? { filter: { includeBackground: true } } : {}),
+      }),
+    )
+      .then(({ value: result, includedBackground }) => {
+        if (mine !== generation) return;
         const next = new Map<string, WorkspaceInfo>();
         for (const w of result.entries) {
-          if (w.archivingAt || w.background) continue;
+          if (!shouldListWorkspace(w, includedBackground)) continue;
           const pr = w.githubRuntime?.pullRequest;
           next.set(w.id, {
             id: w.id,
@@ -224,6 +245,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
             activityAt: latest(w.activityAt) || latest(w.lastUserMessageAt, w.statusEnteredAt, w.createdAt),
             statusAt: latest(w.statusEnteredAt),
             ahead: w.gitRuntime?.aheadOfOrigin ?? 0,
+            background: Boolean(w.background),
             pr: pr
               ? {
                   number: pr.number ?? null,
@@ -242,9 +264,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
         // Keep the previous list; cards fall back to sidebar labels.
       })
       .finally(() => {
-        loading = null;
-      });
-    return loading;
+        if (loading === promise) loading = null;
+      }));
+    return promise;
   }
 
   function findHost(list: Map<string, WorkspaceInfo>): string | null {
@@ -861,6 +883,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
       return span;
     };
     if (project) part("pws-part", project);
+    if (info?.background) part("pws-part pws-hidden", "hidden", "Hidden from the sidebar");
     // The name is often the branch; only show the branch when it adds something.
     if (info?.branch && info.branch !== name) part("pws-part pws-branch", info.branch);
     const pr = info?.pr;
@@ -1042,6 +1065,22 @@ export function installSwitcher(paseo: Paseo): Switcher {
     setLayout(next) {
       layout = parseLayout(next);
       writeJson(LAYOUT_KEY, layout);
+    },
+    getIncludeBackground: () => includeBackground,
+    setIncludeBackground(next) {
+      const value = parseIncludeBackground(next);
+      if (value === includeBackground) return;
+      includeBackground = value;
+      writeJson(BACKGROUND_KEY, value);
+      // The cached list was built for the old setting: drop it so the next open reloads.
+      generation++;
+      loading = null;
+      workspacesAt = 0;
+      if (workspaces) {
+        const next = new Map<string, WorkspaceInfo>();
+        for (const [id, w] of workspaces) if (value || !w.background) next.set(id, w);
+        workspaces = next;
+      }
     },
     getShortcut: () => shortcut,
     setShortcut(next) {
@@ -1337,6 +1376,7 @@ const CSS = `
 .pws-pr-draft .pws-icon, .pws-pr-closed { color: var(--pws-muted); }
 .pws-pr-closed .pws-icon { color: var(--pws-bad); }
 .pws-pr-merged { color: var(--pws-merged); }
+.pws-hidden { font-style: italic; }
 .pws-checks-success, .pws-approved { color: var(--pws-ok); }
 .pws-checks-failure, .pws-changes { color: var(--pws-bad); }
 .pws-checks-pending { color: var(--pws-wait); }

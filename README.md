@@ -56,7 +56,7 @@ The Command Center has **Switch workspace (…)**, titled with your chosen short
 
 The switcher owns the chosen shortcut and its Shift variant. A Paseo shortcut bound to either one, such as Next tab on Ctrl+Tab, does not fire while the plugin is installed.
 
-**Settings → Plugins → Workspace Switcher** sets the **Shortcut** (**Cmd+`** by default, **Ctrl+Tab**, **Option+Tab** or **Ctrl+`**; on macOS the system keeps Ctrl+Tab for switching apps and Cmd+` for "Move focus to next window", which must be turned off), the **Layout**, **List** (default) or **Thumbnails**, and how many recent workspaces appear, from 2 to 9 (default 5). Settings and the visit order are saved per device.
+**Settings → Plugins → Workspace Switcher** sets the **Shortcut** (**Cmd+`** by default, **Ctrl+Tab**, **Option+Tab** or **Ctrl+`**; on macOS the system keeps Ctrl+Tab for switching apps and Cmd+` for "Move focus to next window", which must be turned off), the **Layout**, **List** (default) or **Thumbnails**, how many recent workspaces appear, from 2 to 9 (default 5), and whether to **Include background workspaces** (on by default; lists workspaces hidden from the sidebar, which stays unchanged). Settings and the visit order are saved per device.
 
 Status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
 

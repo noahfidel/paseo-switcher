@@ -1,5 +1,5 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { SettingsCard, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
+import { SettingsCard, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { useState, type ComponentType } from "react";
 import { MAX_LIMIT, MIN_LIMIT, SHORTCUTS, type Layout, type Shortcut } from "./model";
 import type { Switcher } from "./switcher";
@@ -25,6 +25,7 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
     const [limit, setLimit] = useState(String(switcher.getLimit()));
     const [layout, setLayout] = useState<Layout>(switcher.getLayout());
     const [shortcut, setShortcut] = useState<Shortcut>(switcher.getShortcut());
+    const [includeBackground, setIncludeBackground] = useState(switcher.getIncludeBackground());
     return (
       <SettingsSection title="Switcher">
         <SettingsCard>
@@ -56,6 +57,15 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
             onValueChange={(value) => {
               switcher.setLimit(Number(value));
               setLimit(String(switcher.getLimit()));
+            }}
+          />
+          <SettingsSwitch
+            label="Include background workspaces"
+            hint="Also list workspaces hidden from the sidebar. Your sidebar is unchanged."
+            value={includeBackground}
+            onValueChange={(value) => {
+              switcher.setIncludeBackground(value);
+              setIncludeBackground(switcher.getIncludeBackground());
             }}
           />
         </SettingsCard>

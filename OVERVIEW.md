@@ -12,11 +12,12 @@ The Command Center also has **Switch workspace (Cmd+`)**, which (its title shows
 
 ## Settings
 
-**Settings → Plugins → Workspace Switcher** has three settings, saved on each device along with the visit order:
+**Settings → Plugins → Workspace Switcher** has four settings, saved on each device along with the visit order:
 
 - **Layout**: **List** (the default) shows each workspace's full name, project, branch, pull request and checks, diff stat, unpushed commits, and what its agent is doing and for how long. It takes no thumbnails, so the plugin does no background work at all. **Thumbnails** shows a row of cards with a preview of each workspace instead.
 - **Shortcut**: **Cmd+`** (the default), **Ctrl+Tab**, **Option+Tab** or **Ctrl+`**. Hold the modifier, tap the key to open and step forward, add Shift to step back, and release the modifier to switch. On macOS, turn off the system's "Move focus to next window" shortcut (System Settings → Keyboard → Keyboard Shortcuts → Keyboard), which otherwise keeps Cmd+` for itself. Ctrl+Tab suits Windows and Linux; macOS keeps it for switching apps. Paseo uses Ctrl+` itself (Toggle Explorer sidebar), so Ctrl+` is only for when you have unbound that. Keys are matched by physical position, so the shortcut works on any keyboard layout.
 - **Workspaces shown**: how many recent workspaces appear, 2 to 9, default 5.
+- **Include background workspaces**: on by default. Also lists workspaces hidden from the sidebar, marked "hidden". Your sidebar is unchanged. Hosts that do not support background workspaces keep the sidebar's list.
 
 ## Cards
 
