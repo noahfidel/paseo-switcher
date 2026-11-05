@@ -3,7 +3,7 @@
   "type": "module",
   "version": "1.0.1",
   "license": "MIT",
-  "description": "Arc-style Ctrl+Tab workspace switcher for Paseo: your most recent workspaces with full names, branches, pull requests and agent status.",
+  "description": "Arc-style Ctrl+Tab workspace switcher for Paseo: your most recent workspaces with full names, branches, pull requests and agent status, and type to find any workspace.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tomgrin10/paseo-switcher.git"
@@ -24,7 +24,8 @@
     "assets/",
     "OVERVIEW.md",
     "index.client.tsx",
-    "client/"
+    "client/",
+    "docs/media/"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

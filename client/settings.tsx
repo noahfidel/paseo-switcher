@@ -23,7 +23,7 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
         <SettingsCard>
           <SettingsSelect
             label="Layout"
-            hint="List shows full names, branches, pull requests and agent status. Thumbnails shows a row of workspace previews, which the plugin snapshots in the background."
+            hint="List: full names, branches, pull requests and agent status. Thumbnails: a preview of each workspace, refreshed in idle time."
             value={layout}
             options={LAYOUTS}
             onValueChange={(value) => {
@@ -33,7 +33,7 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
           />
           <SettingsSelect
             label="Workspaces shown"
-            hint="How many of your most recently used workspaces Ctrl+Tab shows. Saved on this device."
+            hint="How many recent workspaces Ctrl+Tab shows. Type while it is open to search all of them."
             value={limit}
             options={OPTIONS}
             onValueChange={(value) => {

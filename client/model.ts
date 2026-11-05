@@ -30,6 +30,14 @@ export function parseLayout(value: unknown): Layout {
   return value === "strip" ? "strip" : DEFAULT_LAYOUT;
 }
 
+/** What a status reads as. `attention` is Paseo's "finished, not looked at yet". */
+export const STATUS_LABEL: Record<Exclude<WorkspaceInfo["status"], "done">, string> = {
+  running: "Running",
+  needs_input: "Needs input",
+  attention: "Finished",
+  failed: "Failed",
+};
+
 /** Compact age: "now", "4m", "3h", "2d". */
 export function ago(at: number | undefined, now: number): string | null {
   if (!at) return null;
@@ -127,4 +135,68 @@ export function wrap(index: number, length: number): number {
 export function previousKey(mru: readonly string[], currentKey: string | null): string | null {
   for (const key of mru) if (key !== currentKey) return key;
   return null;
+}
+
+// ---- type to filter ---------------------------------------------------------------------------
+
+/** Lowercased words of a query; empty when there is nothing to filter by. */
+export function queryWords(query: string): string[] {
+  return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function haystack(info: WorkspaceInfo): string {
+  const pr = info.pr?.number ? ` #${info.pr.number} ${info.pr.number}` : "";
+  return `${info.name} ${info.project} ${info.branch ?? ""}${pr}`.toLowerCase();
+}
+
+function startsWord(text: string, at: number): boolean {
+  return at === 0 || /[^a-z0-9]/i.test(text[at - 1]);
+}
+
+/**
+ * Every workspace whose name, project, branch or pull request number contains all the query's
+ * words. Names that match at the start of a word come first; ties keep recency (visit order, then
+ * latest activity), so the workspace you were just in stays near the top.
+ */
+export function filterCards(
+  query: string,
+  mru: readonly string[],
+  serverId: string | null,
+  workspaces: ReadonlyMap<string, WorkspaceInfo> | null,
+  max = MAX_LIMIT,
+): Card[] {
+  const words = queryWords(query);
+  if (!words.length || !serverId || !workspaces) return [];
+  const recent = new Map(mru.map((key, i) => [key, i]));
+  const scored: Array<{ card: Card; rank: number; recency: number; activity: number }> = [];
+  for (const info of workspaces.values()) {
+    const text = haystack(info);
+    if (!words.every((w) => text.includes(w))) continue;
+    const name = info.name.toLowerCase();
+    const named = words.every((w) => {
+      for (let at = name.indexOf(w); at !== -1; at = name.indexOf(w, at + 1)) if (startsWord(name, at)) return true;
+      return false;
+    });
+    const key = workspaceKey(serverId, info.id);
+    scored.push({ card: { key, serverId, workspaceId: info.id, info }, rank: named ? 0 : 1, recency: recent.get(key) ?? Infinity, activity: info.activityAt });
+  }
+  scored.sort((a, b) => a.rank - b.rank || a.recency - b.recency || b.activity - a.activity);
+  return scored.slice(0, max).map((s) => s.card);
+}
+
+/** [start, end) ranges of `text` that match the query's words, merged and sorted, for highlighting. */
+export function matchRanges(text: string, query: string): Array<[number, number]> {
+  const lower = text.toLowerCase();
+  const ranges: Array<[number, number]> = [];
+  for (const w of queryWords(query)) {
+    for (let at = lower.indexOf(w); at !== -1; at = lower.indexOf(w, at + w.length)) ranges.push([at, at + w.length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+    else merged.push([r[0], r[1]]);
+  }
+  return merged;
 }

@@ -2,7 +2,15 @@
   "id": "paseo-switcher",
   "name": "Workspace Switcher",
   "icon": "assets/icon.png",
-  "description": "Arc-style Ctrl+Tab workspace switcher: hold Ctrl, tap Tab through your recent workspaces with full names, branches, PRs and agent status, release to switch.",
+  "description": "Arc-style Ctrl+Tab workspace switcher: hold Ctrl, tap Tab through your recent workspaces with full names, branches, PRs and agent status, release to switch. Type to find any workspace.",
+  "media": [
+    "docs/media/switcher.gif",
+    "docs/media/switcher-list-dark.png",
+    "docs/media/switcher-filter-dark.png",
+    "docs/media/switcher-list-light.png",
+    "docs/media/switcher-thumbnails.gif",
+    "docs/media/switcher-phone-dark.png"
+  ],
   "requirements": {
     "paseo": ">=0.15.0 <0.16.0"
   }

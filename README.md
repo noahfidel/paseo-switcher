@@ -5,17 +5,26 @@
 [![Paseo](https://img.shields.io/badge/Paseo-0.15-8A63D2?style=for-the-badge)](https://paseo.sh)
 [![License](https://img.shields.io/github/license/tomgrin10/paseo-switcher?style=for-the-badge&color=2563eb)](LICENSE)
 
-Arc-style Ctrl+Tab for Paseo workspaces. Hold Ctrl and tap Tab to step through your most recently used workspaces, release Ctrl to switch. A quick Ctrl+Tab flips straight back to the previous workspace without drawing anything.
+Arc-style Ctrl+Tab for Paseo workspaces. Hold Ctrl and tap Tab to step through your most recently used workspaces, release Ctrl to switch. A quick Ctrl+Tab flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number.
 
-The default list shows each workspace's full name, project, branch, pull request and checks, diff stat, and what its agent is doing:
+![Holding Ctrl+Tab to browse recent workspaces, releasing to switch, a quick tap back, then typing "search" to find a workspace](docs/media/switcher.gif)
 
-![The list layout: holding Ctrl+Tab to browse recent workspaces, releasing to switch, then a quick tap back](docs/images/switcher-list.gif)
+Each row shows the full workspace name, project, branch, pull request with its checks and review, diff stat, unpushed commits, and what the agent is doing and for how long:
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/media/switcher-list-light.png">
+  <img alt="The list: five recent workspaces with status, pull request, checks, review and diff stat" src="docs/media/switcher-list-dark.png">
+</picture>
+
+Typing filters every workspace, not only the recent ones, and marks what matched:
+
+![Typing "api" finds two workspaces in the api project](docs/media/switcher-filter-dark.png)
 
 Or choose the **Thumbnails** layout for a row of previews of how you left each workspace:
 
-![The thumbnails layout: a row of workspace previews, browsed with Ctrl+Tab](docs/images/switcher-thumbnails.gif)
+![The thumbnails layout: a row of workspace previews, browsed with Ctrl+Tab](docs/media/switcher-thumbnails.gif)
 
-Recorded from the real plugin. Workspace names, details and conversation text are replaced with sample data.
+Recorded from the real plugin against a test daemon with sample workspaces; pull request details are sample data.
 
 ## Install
 
@@ -33,26 +42,32 @@ paseo plugin install paseo-switcher
 | Ctrl+Shift+Tab | Move back |
 | Release Ctrl | Switch to the selected workspace |
 | Quick Ctrl+Tab | Go straight back to the previous workspace |
-| Arrows, Enter, 1–9 | Move, switch, or jump to a card |
-| Esc | Cancel |
+| Arrows, Enter, 1–9 | Move, switch, or jump to a row |
+| Type | Filter all workspaces; the switcher then stays open until Enter or a click |
+| Esc | Clear the filter, then cancel |
 
-Hovering a card selects it and clicking switches to it. The Command Center has **Switch workspace (Ctrl+Tab)** for browser tabs, where the browser keeps Ctrl+Tab for itself.
+While the switcher is open it takes every key, so typing never triggers a Paseo shortcut. Number keys jump to a row until you type a filter; after that they search pull request numbers too. Hovering a row selects it and clicking switches to it.
+
+The Command Center has **Switch workspace (Ctrl+Tab)** for browser tabs, where the browser keeps Ctrl+Tab for itself, and for the web UI on a phone, where a tap switches:
+
+<img alt="The switcher in a phone browser, opened from the Command Center" src="docs/media/switcher-phone-dark.png" width="300">
 
 The switcher owns Ctrl+Tab and Ctrl+Shift+Tab. A Paseo shortcut bound to either one, such as Next tab, does not fire while the plugin is installed.
 
 **Settings → Plugins → Workspace Switcher** sets the **Layout**, **List** (default) or **Thumbnails**, and how many recent workspaces appear, from 2 to 9 (default 5). Settings and the visit order are saved per device.
 
-A list row shows the full workspace name, project, branch (when it differs from the name), pull request number with draft, merged or closed state, checks and review, diff stat, unpushed commits, and the agent's status and how long it has been in it. A thumbnail card shows a preview, the name, project, branch, diff stat, and a status dot.
+Status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
 
 ## How it stays fast
 
-A quick tap does no drawing at all, only a click on the previous workspace. The list draws in about 2 ms and does no background work. Thumbnails are not live copies of the app: in that layout, while you stay in a workspace, the plugin rasterizes a small image of it when the browser is idle, and never during the two seconds after a switch. The strip itself is about 40 elements and draws in a few milliseconds. The end-to-end suite checks these budgets, along with the claim that normal sidebar switching is no slower with the plugin on. See [TESTING.md](TESTING.md).
+A quick tap does no drawing at all, only a click on the previous workspace. The list draws in about 2 ms and does no background work, and filtering redraws it in a few milliseconds per key. Thumbnails are not live copies of the app: in that layout, while you stay in a workspace, the plugin rasterizes a small image of it when the browser is idle, and never during the two seconds after a switch. The strip itself is about 40 elements and draws in a few milliseconds. The end-to-end suite checks these budgets, along with the claim that normal sidebar switching is no slower with the plugin on. See [TESTING.md](TESTING.md).
 
 ## Limits
 
 - The plugin reads Paseo's page structure, which is not a public plugin API, so it is pinned to Paseo 0.15 and may need an update when Paseo changes.
 - It runs in the desktop app and the web UI, and does nothing on iOS and Android.
-- In the Thumbnails layout, thumbnails are kept in memory only. A workspace you have not opened since the app started shows its project initial instead.
+- In the Thumbnails layout, thumbnails are kept in memory only. A workspace you have not opened since the app started shows "No preview yet" instead.
+- The switcher lists the workspaces of the host you are on. Recent workspaces from another host keep their sidebar name but show no details.
 - Terminals, embedded previews and images loaded from the web appear blank in thumbnails.
 
 ## Development
@@ -62,10 +77,10 @@ npm ci
 npm run verify                  # typecheck and unit tests
 paseo plugin install .
 npm run e2e -- --reload         # behavior and performance against your local daemon
-npm run media                   # README GIFs (needs ffmpeg)
+npm run media                   # README media, against a daemon with sample workspaces
 ```
 
-The end-to-end suite and media script drive Paseo's web UI in headless Chromium and log in with the daemon's local credential, so they need a running daemon but no password. [TESTING.md](TESTING.md) explains every check.
+The end-to-end suite and media script drive Paseo's web UI in headless Chromium and log in with the daemon's local credential, so they need a running daemon but no password. Set `E2E_ORIGIN` and `PASEO_HOME` to run them against an isolated test daemon instead of your own. [TESTING.md](TESTING.md) explains every check.
 
 ## License
 
