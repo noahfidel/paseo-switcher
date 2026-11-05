@@ -166,6 +166,26 @@ export function recordVisit(visits: Visits, key: string, at: number): Visits {
   return capVisits({ ...visits, [key]: at });
 }
 
+// Labels the paseo-bots plugin puts on chats it starts itself, and how long after creation its opening prompt lands.
+export const AUTOMATED_CHAT_LABELS = ["paseo-bots.routine", "paseo-bots.asked-by"];
+export const OPENING_PROMPT_GRACE_MS = 10_000;
+
+/**
+ * When you last messaged an agent, or null if that message was an automated chat's opening prompt
+ * (so bot-started chats do not count as visits until you reply).
+ */
+export function userMessageAt(agent: {
+  lastUserMessageAt: number | null;
+  createdAt: number;
+  labels: Record<string, string>;
+}): number | null {
+  const at = agent.lastUserMessageAt;
+  if (!at) return null;
+  const automated = AUTOMATED_CHAT_LABELS.some((label) => label in agent.labels);
+  if (automated && at <= agent.createdAt + OPENING_PROMPT_GRACE_MS) return null;
+  return at;
+}
+
 /**
  * Counts the last message you sent in each workspace as a visit at that time. Only agents listed
  * for the host in question count, and only their `lastUserMessageAt`; agent output never does.

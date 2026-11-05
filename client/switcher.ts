@@ -13,6 +13,7 @@ import {
   DEFAULT_INCLUDE_BACKGROUND,
   DEFAULT_COUNT_MESSAGES,
   mergeMessageVisits,
+  userMessageAt,
   migrateMru,
   parseCountMessages,
   parseVisits,
@@ -364,7 +365,11 @@ export function installSwitcher(paseo: Paseo): Switcher {
             id: agent.id,
             workspaceId: agent.workspaceId ?? null,
             activityAt: latest(agent.updatedAt, agent.lastUserMessageAt),
-            lastUserMessageAt: latest(agent.lastUserMessageAt) || null,
+            lastUserMessageAt: userMessageAt({
+              lastUserMessageAt: latest(agent.lastUserMessageAt) || null,
+              createdAt: latest(agent.createdAt),
+              labels: agent.labels ?? {},
+            }),
           });
         }
         agents = { serverId: serverId(), list };

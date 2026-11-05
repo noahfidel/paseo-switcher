@@ -32,6 +32,7 @@ import {
   DEFAULT_COUNT_MESSAGES,
   MAX_VISITS,
   mergeMessageVisits,
+  userMessageAt,
   migrateMru,
   parseCountMessages,
   parseVisits,
@@ -461,4 +462,31 @@ test("counting messages as visits is on by default", () => {
   assert.equal(parseCountMessages("yes"), true);
   assert.equal(parseCountMessages(false), false);
   assert.equal(parseCountMessages(true), true);
+});
+
+const T0 = 1_000_000;
+const automated = (label: string, offsetMs: number | null) => ({
+  createdAt: T0,
+  lastUserMessageAt: offsetMs === null ? null : T0 + offsetMs,
+  labels: { [label]: "x" },
+});
+
+test("userMessageAt ignores the opening prompt of a routine chat", () => {
+  assert.equal(userMessageAt(automated("paseo-bots.routine", 1000)), null);
+});
+
+test("userMessageAt ignores the opening prompt of an asked-by chat", () => {
+  assert.equal(userMessageAt(automated("paseo-bots.asked-by", 1000)), null);
+});
+
+test("userMessageAt counts a later reply in an automated chat", () => {
+  assert.equal(userMessageAt(automated("paseo-bots.routine", 60_000)), T0 + 60_000);
+});
+
+test("userMessageAt counts the first message of an unlabelled chat", () => {
+  assert.equal(userMessageAt({ createdAt: T0, lastUserMessageAt: T0 + 1000, labels: {} }), T0 + 1000);
+});
+
+test("userMessageAt is null without a message", () => {
+  assert.equal(userMessageAt(automated("paseo-bots.routine", null)), null);
 });
