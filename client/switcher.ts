@@ -1,7 +1,13 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import {
+  agentIdFromTabTestId,
+  agentToOpen,
   ago,
   buildCards,
+  parseAgentMemory,
+  pickFocusedAgent,
+  rememberAgent,
+  type AgentInfo,
   clampLimit,
   DEFAULT_LAYOUT,
   DEFAULT_INCLUDE_BACKGROUND,
@@ -36,6 +42,10 @@ import {
  * - route: /h/<serverId>/workspace/<workspaceId>
  * - row:   the sidebar workspace row; clicking it is how a person switches
  * - pane:  the workspace deck entry; snapshotted for thumbnails
+ * - tab:   an agent tab in the pane's tab row (`workspace-tab-agent_<agentId>`), `aria-selected`
+ *          when it is its pane's active tab; read to remember the last focused agent
+ * - open:  `?open=agent:<agentId>` on the workspace route makes Paseo reveal that agent's tab
+ *          (Paseo marks this input COMPAT(workspace-open-url), kept for bookmarks and deep links)
  * Outside a workspace (the home screen) with no history yet, the host is found by matching a loaded
  * workspace to its sidebar row, or, with the sidebar hidden, from the app's saved host list when it
  * has a single host (localStorage `@paseo:daemon-registry`).
@@ -44,12 +54,19 @@ const ROUTE = /^\/h\/([^/]+)\/workspace\/([^/?#]+)/;
 const ROW_PREFIX = "sidebar-workspace-row-";
 const rowSelector = (key: string) => `[data-testid="${ROW_PREFIX}${key}"]`;
 const paneSelector = (key: string) => `[data-testid="workspace-deck-entry-${key}"]`;
+const SELECTED_AGENT_TABS = '[data-testid^="workspace-tab-agent_"][aria-selected="true"]';
+function workspaceRoute(serverId: string, workspaceId: string, agentId: string | null): string {
+  const path = `/h/${encodeURIComponent(serverId)}/workspace/${encodeURIComponent(workspaceId)}`;
+  return agentId ? `${path}?open=${encodeURIComponent(`agent:${agentId}`)}` : path;
+}
 
 const MRU_KEY = "paseo-switcher:mru";
 const LIMIT_KEY = "paseo-switcher:limit";
 const LAYOUT_KEY = "paseo-switcher:layout";
 const SHORTCUT_KEY = "paseo-switcher:shortcut";
 const BACKGROUND_KEY = "paseo-switcher:include-background";
+/** Last focused agent tab per workspace key. */
+const AGENTS_KEY = "paseo-switcher:last-agent";
 const HOSTS_KEY = "@paseo:daemon-registry";
 /** A tap shorter than this switches without ever drawing the strip. */
 const SHOW_DELAY_MS = 110;
@@ -137,6 +154,11 @@ export function installSwitcher(paseo: Paseo): Switcher {
   let includeBackground = parseIncludeBackground(readJson(BACKGROUND_KEY, DEFAULT_INCLUDE_BACKGROUND));
   let workspaces: Map<string, WorkspaceInfo> | null = null;
   let workspacesAt = 0;
+  /** The agent tab last focused in each workspace, so switching back reopens it. */
+  let agentMemory = parseAgentMemory(readJson(AGENTS_KEY, {}));
+  /** The host's agents, for the "most recently active" fallback; tagged with the host they came from. */
+  let agents: { serverId: string | null; list: AgentInfo[] } | null = null;
+  let agentsAt = 0;
   /** Rasterized thumbnails by workspace key, oldest first. Each canvas records its theme. */
   const thumbs = new Map<string, Node>();
 
@@ -212,6 +234,31 @@ export function installSwitcher(paseo: Paseo): Switcher {
     watchPane();
   }
 
+  /** Remembers which agent tab is active in the current workspace. One query inside the pane. */
+  function rememberFocusedAgent() {
+    const key = currentKey();
+    const pane = key ? currentPane() : null;
+    if (!key || !pane) return;
+    const selected: string[] = [];
+    for (const tab of pane.querySelectorAll(SELECTED_AGENT_TABS)) {
+      const id = agentIdFromTabTestId(tab.getAttribute("data-testid"));
+      if (id) selected.push(id);
+    }
+    const agentId = pickFocusedAgent(selected, agentMemory[key]);
+    if (!agentId) return;
+    const next = rememberAgent(agentMemory, key, agentId);
+    if (next === agentMemory) return;
+    agentMemory = next;
+    writeJson(AGENTS_KEY, agentMemory);
+  }
+
+  /** The agent tab to reveal when switching to `key` by route, or null for Paseo's default. */
+  function agentFor(key: string): string | null {
+    const { serverId: server, workspaceId } = splitKey(key);
+    const list = agents && agents.serverId === server ? agents.list : null;
+    return agentToOpen(workspaceId, agentMemory[key], list);
+  }
+
   // ---- workspace data -------------------------------------------------------------------------
 
   let loading: Promise<void> | null = null;
@@ -265,6 +312,36 @@ export function installSwitcher(paseo: Paseo): Switcher {
       })
       .finally(() => {
         if (loading === promise) loading = null;
+      }));
+    return promise;
+  }
+
+  let loadingAgents: Promise<void> | null = null;
+  function loadAgents(): Promise<void> {
+    const mine = generation;
+    const wanted = includeBackground;
+    const promise: Promise<void> = (loadingAgents ??= listWithBackgroundFallback(wanted, (include) =>
+      paseo.agents.list({
+        page: { limit: 200 },
+        sort: [{ key: "updated_at", direction: "desc" }],
+        ...(include ? { filter: { includeBackground: true } } : {}),
+      }),
+    )
+      .then(({ value: result }) => {
+        if (mine !== generation) return;
+        const list: AgentInfo[] = [];
+        for (const { agent } of result.entries) {
+          if (agent.archivedAt || agent.internal) continue;
+          list.push({ id: agent.id, workspaceId: agent.workspaceId ?? null, activityAt: latest(agent.updatedAt, agent.lastUserMessageAt) });
+        }
+        agents = { serverId: serverId(), list };
+        agentsAt = Date.now();
+      })
+      .catch(() => {
+        // Keep the previous list; switching then uses only the remembered agent.
+      })
+      .finally(() => {
+        if (loadingAgents === promise) loadingAgents = null;
       }));
     return promise;
   }
@@ -568,6 +645,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   function begin(nextMode: Mode, direction: 1 | -1) {
     syncRoute();
+    // A tab picked in the last couple of seconds hasn't been sampled yet; catch it before leaving.
+    rememberFocusedAgent();
     mode = nextMode;
     open = true;
     query = "";
@@ -581,6 +660,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function show() {
     if (!open) return;
     render();
+    if (Date.now() - agentsAt > WORKSPACES_STALE_MS) void loadAgents();
     if (Date.now() - workspacesAt > WORKSPACES_STALE_MS) {
       void loadWorkspaces().then(() => {
         if (!root) return;
@@ -657,9 +737,12 @@ export function installSwitcher(paseo: Paseo): Switcher {
       row.click();
       return;
     }
-    // Collapsed project group or a stale sidebar: drive the router the way back/forward does.
+    // Hidden workspace, collapsed project group or a stale sidebar: drive the router the way
+    // back/forward does. Without a row click Paseo picks no tab, so name the agent to reveal: the
+    // one last focused there, else its most recently active one. Rows keep the click, which runs
+    // Paseo's own choice (an agent needing attention, else the workspace's saved layout).
     const { serverId: server, workspaceId } = splitKey(key);
-    const path = `/h/${encodeURIComponent(server)}/workspace/${encodeURIComponent(workspaceId)}`;
+    const path = workspaceRoute(server, workspaceId, agentFor(key));
     win.history.pushState(win.history.state, "", path);
     win.dispatchEvent(new g.PopStateEvent("popstate", { state: win.history.state }));
   }
@@ -1047,12 +1130,14 @@ export function installSwitcher(paseo: Paseo): Switcher {
   // right after a frame paints so measuring the pane never forces Paseo's pending layout early.
   const refreshTimer = setInterval(() => {
     if (currentPane() !== watched) watchPane();
+    if (!open && !doc.hidden && Date.now() >= quietUntil) rememberFocusedAgent();
     if (layout === "strip" && dirty && !doc.hidden && Date.now() >= quietUntil) {
       whenIdle(() => win.requestAnimationFrame(() => setTimeout(snapshotIfDirty, 0)));
     }
   }, REFRESH_MS);
   syncRoute();
   void loadWorkspaces();
+  void loadAgents();
 
   const api: Switcher = {
     open: () => begin("sticky", 1),
@@ -1076,6 +1161,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
       generation++;
       loading = null;
       workspacesAt = 0;
+      loadingAgents = null;
+      agentsAt = 0;
       if (workspaces) {
         const next = new Map<string, WorkspaceInfo>();
         for (const [id, w] of workspaces) if (value || !w.background) next.set(id, w);

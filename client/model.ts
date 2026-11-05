@@ -243,6 +243,66 @@ export function matchRanges(text: string, query: string): Array<[number, number]
   return merged;
 }
 
+// ---- last focused agent per workspace ------------------------------------------------------------
+
+/** An agent the host lists, reduced to what choosing a tab needs. */
+export interface AgentInfo {
+  id: string;
+  workspaceId: string | null;
+  activityAt: number;
+}
+
+const AGENT_TAB_PREFIX = "workspace-tab-agent_";
+const MAX_REMEMBERED_AGENTS = 200;
+
+/** The agent id in an agent tab's test ID (`workspace-tab-agent_<id>`); null for any other tab. */
+export function agentIdFromTabTestId(testId: string | null | undefined): string | null {
+  if (!testId?.startsWith(AGENT_TAB_PREFIX)) return null;
+  return testId.slice(AGENT_TAB_PREFIX.length) || null;
+}
+
+/**
+ * Split panes each have a selected tab. Keep the remembered agent while it is still one of them,
+ * so a split doesn't flip the memory back and forth; otherwise take the first.
+ */
+export function pickFocusedAgent(selected: readonly string[], remembered: string | undefined): string | null {
+  if (remembered && selected.includes(remembered)) return remembered;
+  return selected[0] ?? null;
+}
+
+/** Records `agentId` as the last focused agent of a workspace. Newest last; oldest dropped past the cap. */
+export function rememberAgent(memory: Record<string, string>, key: string, agentId: string): Record<string, string> {
+  const keys = Object.keys(memory);
+  if (memory[key] === agentId && keys[keys.length - 1] === key) return memory;
+  const next: Record<string, string> = {};
+  for (const k of keys.slice(-(MAX_REMEMBERED_AGENTS - 1))) if (k !== key) next[k] = memory[k];
+  next[key] = agentId;
+  return next;
+}
+
+export function parseAgentMemory(value: unknown): Record<string, string> {
+  const memory: Record<string, string> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return memory;
+  for (const [k, v] of Object.entries(value)) if (typeof v === "string") memory[k] = v;
+  return memory;
+}
+
+/**
+ * The agent tab to open when switching to a workspace: the one last focused there while it still
+ * belongs to it, else the workspace's most recently active agent, else none (Paseo's default).
+ * The agent list is one page, so it only overrules memory when it lists agents of this workspace;
+ * with no list, or none of the workspace's agents on it, the remembered agent is trusted.
+ */
+export function agentToOpen(workspaceId: string, remembered: string | undefined, agents: readonly AgentInfo[] | null): string | null {
+  let latest: AgentInfo | null = null;
+  for (const agent of agents ?? []) {
+    if (agent.workspaceId !== workspaceId) continue;
+    if (agent.id === remembered) return remembered;
+    if (!latest || agent.activityAt > latest.activityAt) latest = agent;
+  }
+  return latest?.id ?? remembered ?? null;
+}
+
 /** Whether a workspace belongs in the switcher: never one being archived; background ones only when included. */
 export function shouldListWorkspace(w: { archivingAt?: unknown; background?: boolean }, includeBackground: boolean): boolean {
   if (w.archivingAt) return false;

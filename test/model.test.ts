@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  agentIdFromTabTestId,
+  agentToOpen,
   ago,
   buildCards,
+  parseAgentMemory,
+  pickFocusedAgent,
+  rememberAgent,
+  type AgentInfo,
   clampLimit,
   DEFAULT_LIMIT,
   filterCards,
@@ -302,4 +308,67 @@ test("listWithBackgroundFallback asks once when included, and never asks when of
 test("listWithBackgroundFallback rethrows other errors and failures of the retry", async () => {
   await assert.rejects(listWithBackgroundFallback(true, async () => { throw new Error("boom"); }), /boom/);
   await assert.rejects(listWithBackgroundFallback(false, async () => { throw new Error("background workspaces"); }), /background/);
+});
+
+// ---- last focused agent per workspace ------------------------------------------------------------
+
+test("agentIdFromTabTestId reads agent tabs and ignores other tab kinds", () => {
+  assert.equal(agentIdFromTabTestId("workspace-tab-agent_abc-123"), "abc-123");
+  assert.equal(agentIdFromTabTestId("workspace-tab-terminal_t1"), null);
+  assert.equal(agentIdFromTabTestId("workspace-tab-provider_subagent_3_abc_1_x"), null);
+  assert.equal(agentIdFromTabTestId("workspace-tab-agent_"), null);
+  assert.equal(agentIdFromTabTestId(null), null);
+});
+
+test("pickFocusedAgent keeps the remembered agent among several selected tabs, else the first", () => {
+  assert.equal(pickFocusedAgent([], "a"), null);
+  assert.equal(pickFocusedAgent(["b"], "a"), "b");
+  assert.equal(pickFocusedAgent(["b", "a"], "a"), "a");
+  assert.equal(pickFocusedAgent(["b", "c"], "a"), "b");
+  assert.equal(pickFocusedAgent(["b", "c"], undefined), "b");
+});
+
+test("rememberAgent records the latest agent, keeps the object when unchanged, and stays bounded", () => {
+  const empty = {};
+  const one = rememberAgent(empty, "s:w1", "a1");
+  assert.deepEqual(one, { "s:w1": "a1" });
+  assert.notEqual(one, empty);
+  assert.equal(rememberAgent(one, "s:w1", "a1"), one);
+  assert.deepEqual(rememberAgent(one, "s:w1", "a2"), { "s:w1": "a2" });
+  let many: Record<string, string> = {};
+  for (let i = 0; i < 250; i++) many = rememberAgent(many, `s:w${i}`, `a${i}`);
+  assert.equal(Object.keys(many).length, 200);
+  assert.equal(many["s:w0"], undefined);
+  assert.equal(many["s:w249"], "a249");
+  // Updating an old entry moves it to the newest end, so it survives the next trim.
+  const touched = rememberAgent(many, "s:w50", "z");
+  assert.equal(Object.keys(touched).at(-1), "s:w50");
+});
+
+test("parseAgentMemory keeps only string pairs", () => {
+  assert.deepEqual(parseAgentMemory({ "s:w": "a", bad: 3, also: null }), { "s:w": "a" });
+  assert.deepEqual(parseAgentMemory(null), {});
+  assert.deepEqual(parseAgentMemory(["x"]), {});
+  assert.deepEqual(parseAgentMemory("nope"), {});
+});
+
+test("agentToOpen prefers the remembered agent while it still exists in that workspace", () => {
+  const agents: AgentInfo[] = [
+    { id: "old", workspaceId: "w1", activityAt: 100 },
+    { id: "new", workspaceId: "w1", activityAt: 300 },
+    { id: "other", workspaceId: "w2", activityAt: 900 },
+  ];
+  assert.equal(agentToOpen("w1", "old", agents), "old");
+  // Unknown agent list: trust what was remembered.
+  assert.equal(agentToOpen("w1", "old", null), "old");
+  // Archived or moved away: fall back to the most recently active agent there.
+  assert.equal(agentToOpen("w1", "gone", agents), "new");
+  assert.equal(agentToOpen("w1", "other", agents), "new");
+  // Nothing remembered: most recently active.
+  assert.equal(agentToOpen("w1", undefined, agents), "new");
+  // The list is one page: a workspace with none of its agents on it says nothing, so trust memory.
+  assert.equal(agentToOpen("w3", "kept", agents), "kept");
+  // Nothing at all: keep Paseo's default.
+  assert.equal(agentToOpen("w3", undefined, agents), null);
+  assert.equal(agentToOpen("w3", undefined, null), null);
 });

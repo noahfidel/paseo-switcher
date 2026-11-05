@@ -58,11 +58,13 @@ The switcher owns the chosen shortcut and its Shift variant. A Paseo shortcut bo
 
 **Settings → Plugins → Workspace Switcher** sets the **Shortcut** (**Cmd+`** by default, **Ctrl+Tab**, **Option+Tab** or **Ctrl+`**; on macOS the system keeps Ctrl+Tab for switching apps and Cmd+` for "Move focus to next window", which must be turned off), the **Layout**, **List** (default) or **Thumbnails**, how many recent workspaces appear, from 2 to 9 (default 5), and whether to **Include background workspaces** (on by default; lists workspaces hidden from the sidebar, which stays unchanged). Settings and the visit order are saved per device.
 
+Switching to a workspace with no sidebar row (a hidden one, or one in a collapsed project) reopens the chat you last had open there, or its most recently active chat. Workspaces in the sidebar open the way a sidebar click does.
+
 Status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
 
 ## How it stays fast
 
-A quick tap does no drawing at all, only a click on the previous workspace. The list draws in about 2 ms and does no background work, and filtering redraws it in a few milliseconds per key. Thumbnails are not live copies of the app: in that layout, while you stay in a workspace, the plugin rasterizes a small image of it when the browser is idle, and never during the two seconds after a switch. The strip itself is about 40 elements and draws in a few milliseconds. The end-to-end suite checks these budgets, along with the claim that normal sidebar switching is no slower with the plugin on. See [TESTING.md](TESTING.md).
+A quick tap does no drawing at all, only a click on the previous workspace. The list draws in about 2 ms and its only background work is one lookup every two seconds of which chat tab is open, and filtering redraws it in a few milliseconds per key. Thumbnails are not live copies of the app: in that layout, while you stay in a workspace, the plugin rasterizes a small image of it when the browser is idle, and never during the two seconds after a switch. The strip itself is about 40 elements and draws in a few milliseconds. The end-to-end suite checks these budgets, along with the claim that normal sidebar switching is no slower with the plugin on. See [TESTING.md](TESTING.md).
 
 ## Limits
 
