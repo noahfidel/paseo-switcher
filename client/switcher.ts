@@ -5,6 +5,7 @@ import {
   ago,
   rowFacts,
   buildCards,
+  carriedLists,
   parseAgentMemory,
   pickFocusedAgent,
   rememberAgent,
@@ -78,6 +79,8 @@ import {
  *          with the same pushState + popstate as a hidden workspace (a plugin can only open its own screens through
  *          the API). The title is the text of `[data-testid="plugin-surface-title"]` in the screen header.
  *          This URL format is not public: re-check it, and the title test ID, on every Paseo upgrade.
+ *          Paseo 0.15 re-runs the plugin after each such navigation, so a disposed switcher leaves its
+ *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
  * Outside a workspace (the home screen) with no history yet, the host is found by matching a loaded
  * workspace to its sidebar row, or, with the sidebar hidden, from the app's saved host list when it
  * has a single host (localStorage `@paseo:daemon-registry`).
@@ -107,6 +110,8 @@ const BACKGROUND_KEY = "paseo-switcher:include-background";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
 const HOSTS_KEY = "@paseo:daemon-registry";
+/** Global slot where a disposed switcher leaves its loaded lists for the next install. */
+const CARRY_KEY = "__paseoSwitcherLists";
 /** A tap shorter than this switches without ever drawing the strip. */
 const SHOW_DELAY_MS = 110;
 const POLL_ROUTE_MS = 300;
@@ -218,13 +223,16 @@ export function installSwitcher(paseo: Paseo): Switcher {
   let layout = parseLayout(readJson(LAYOUT_KEY, DEFAULT_LAYOUT));
   /** Also list workspaces hidden from the sidebar. */
   let includeBackground = parseIncludeBackground(readJson(BACKGROUND_KEY, DEFAULT_INCLUDE_BACKGROUND));
-  let workspaces: Map<string, WorkspaceInfo> | null = null;
-  let workspacesAt = 0;
+  // A reinstalled switcher (Paseo re-runs the plugin after a route change) starts from what the last one loaded.
+  const carried = carriedLists(g[CARRY_KEY], includeBackground);
+  g[CARRY_KEY] = undefined;
+  let workspaces: ReadonlyMap<string, WorkspaceInfo> | null = carried?.workspaces ?? null;
+  let workspacesAt = carried?.workspacesAt ?? 0;
   /** The agent tab last focused in each workspace, so switching back reopens it. */
   let agentMemory = parseAgentMemory(readJson(AGENTS_KEY, {}));
   /** The host's agents, for the "most recently active" fallback; tagged with the host they came from. */
-  let agents: { serverId: string | null; list: AgentInfo[] } | null = null;
-  let agentsAt = 0;
+  let agents: { serverId: string | null; list: AgentInfo[] } | null = carried?.agents ?? null;
+  let agentsAt = carried?.agentsAt ?? 0;
   /** Rasterized thumbnails by workspace key, oldest first. Each canvas records its theme. */
   const thumbs = new Map<string, Node>();
 
@@ -243,7 +251,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   /** Every match for the query; only the first MAX_LIMIT are listed. */
   let matches = 0;
   /** The host of the loaded workspace list, for when neither the route nor the history names one. */
-  let homeServer: string | null = null;
+  let homeServer: string | null = carried?.homeServer ?? null;
   const coarse = Boolean(win.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
 
   const style = doc.createElement("style");
@@ -1346,6 +1354,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     },
     dispose() {
       close();
+      g[CARRY_KEY] = { includeBackground, workspaces, workspacesAt, homeServer, agents, agentsAt };
       shortcutListeners.clear();
       clearInterval(routeTimer);
       clearInterval(refreshTimer);

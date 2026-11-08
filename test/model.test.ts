@@ -60,6 +60,7 @@ import {
   trackScreenVisit,
   SCREEN_DWELL_MS,
   type PendingScreenVisit,
+  carriedLists,
 } from "../client/model.ts";
 
 const S = "srv_a";
@@ -854,4 +855,22 @@ test("rowFacts: a plugin screen shows only its plugin name and when it was visit
   assert.equal(f.diff, null);
   assert.equal(f.ahead, 0);
   assert.equal(f.hidden, false);
+});
+
+// Paseo re-runs the plugin after the switcher navigates by route (plugin screens, hidden workspaces),
+// so a fresh switcher opened right after a switch must start from the lists the previous one loaded.
+test("a reinstalled switcher keeps the workspace list the previous one loaded", () => {
+  const ws = list(info("hidden1", 3), info("hidden2", 2));
+  const saved = { includeBackground: true, workspaces: ws, workspacesAt: 1000, homeServer: S, agents: null, agentsAt: 0 };
+  const carried = carriedLists(saved, true);
+  const cards = buildCards([`${S}:hidden1`, `${S}:hidden2`], S, carried?.workspaces ?? null, 5);
+  assert.deepEqual(cards.map((c) => c.info?.name ?? null), ["hidden1", "hidden2"]);
+  assert.equal(carried?.workspacesAt, 1000, "keeps the load time, so a stale list is still refreshed");
+});
+
+test("lists loaded under the other background setting, or nothing saved, are not carried", () => {
+  const saved = { includeBackground: true, workspaces: list(info("a", 1)), workspacesAt: 1, homeServer: S, agents: null, agentsAt: 0 };
+  assert.equal(carriedLists(saved, false), null);
+  assert.equal(carriedLists(undefined, true), null);
+  assert.equal(carriedLists({ includeBackground: true, workspaces: "nope" }, true), null);
 });

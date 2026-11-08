@@ -711,6 +711,30 @@ export function parseIncludeBackground(value: unknown): boolean {
   return typeof value === "boolean" ? value : DEFAULT_INCLUDE_BACKGROUND;
 }
 
+/**
+ * What a switcher had loaded when it was disposed. Paseo re-runs the plugin after a route change made
+ * outside its router (the switcher reopens plugin screens and hidden workspaces that way), so without
+ * this every switch would start over with no workspace list, and an open before the reload lands would
+ * show bare rows.
+ */
+export interface CarriedLists {
+  includeBackground: boolean;
+  workspaces: ReadonlyMap<string, WorkspaceInfo> | null;
+  workspacesAt: number;
+  homeServer: string | null;
+  agents: { serverId: string | null; list: AgentInfo[] } | null;
+  agentsAt: number;
+}
+
+/** The previous switcher's lists, unless they were loaded under the other background setting. */
+export function carriedLists(saved: unknown, includeBackground: boolean): CarriedLists | null {
+  if (!saved || typeof saved !== "object") return null;
+  const s = saved as CarriedLists;
+  if (s.includeBackground !== includeBackground) return null;
+  if (s.workspaces !== null && !(s.workspaces instanceof Map)) return null;
+  return s;
+}
+
 /** Hosts without background support reject inclusive discovery with a message that names it. */
 export function isBackgroundUnsupported(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
