@@ -176,6 +176,8 @@ export interface ScreenStop {
   title: string;
   /** The query string last seen on the screen (`?param.…`), or "". */
   search: string;
+  /** Sanitized svg of the screen's own header icon, when one was seen. */
+  icon?: string;
 }
 
 export const MIN_LIMIT = 2;
@@ -279,6 +281,8 @@ export function screenTitle(shown: string | null | undefined, pluginId: string):
 export interface ScreenMeta {
   title: string;
   search: string;
+  /** The screen's header icon as sanitized svg markup; absent when none was captured. */
+  icon?: string;
 }
 /** Latest title and params per screen key. */
 export type Screens = Record<string, ScreenMeta>;
@@ -288,7 +292,10 @@ export function parseScreens(value: unknown): Screens {
   if (!value || typeof value !== "object" || Array.isArray(value)) return screens;
   for (const [k, v] of Object.entries(value)) {
     const m = v as Partial<ScreenMeta> | null;
-    if (isPluginScreenKey(k) && m && typeof m.title === "string" && typeof m.search === "string") screens[k] = { title: m.title, search: m.search };
+    if (!isPluginScreenKey(k) || !m || typeof m.title !== "string" || typeof m.search !== "string") continue;
+    // Stored markup is sanitized again on the way in, in case the saved value was edited.
+    const icon = typeof m.icon === "string" ? sanitizeSvg(m.icon) : null;
+    screens[k] = icon ? { title: m.title, search: m.search, icon } : { title: m.title, search: m.search };
   }
   return screens;
 }
@@ -296,8 +303,8 @@ export function parseScreens(value: unknown): Screens {
 /** Stores the latest title and params for a screen; returns `screens` itself when nothing changed. */
 export function recordScreen(screens: Screens, key: string, meta: ScreenMeta): Screens {
   const current = screens[key];
-  if (current && current.title === meta.title && current.search === meta.search) return screens;
-  return { ...screens, [key]: { title: meta.title, search: meta.search } };
+  if (current && current.title === meta.title && current.search === meta.search && current.icon === meta.icon) return screens;
+  return { ...screens, [key]: meta.icon ? { title: meta.title, search: meta.search, icon: meta.icon } : { title: meta.title, search: meta.search } };
 }
 
 /**
@@ -358,7 +365,7 @@ function screenCard(key: string, meta: ScreenMeta | undefined): Card | null {
     serverId: parts.serverId,
     workspaceId: "",
     info: null,
-    screen: { pluginId: parts.pluginId, screenId: parts.screenId, title: meta.title, search: meta.search },
+    screen: { pluginId: parts.pluginId, screenId: parts.screenId, title: meta.title, search: meta.search, ...(meta.icon ? { icon: meta.icon } : {}) },
   };
 }
 
@@ -604,6 +611,126 @@ export interface AgentInfo {
   lastUserMessageAt?: number | null;
   /** Started automatically (routine, ask, pr-review-watch); never picked as a fallback. */
   automated?: boolean;
+  /** The paseo-bots bot this chat is with (label `paseo-bots.bot`). */
+  botId?: string | null;
+}
+
+/** Label paseo-bots puts on a chat with a bot; its value is the bot's id. */
+export const BOT_LABEL = "paseo-bots.bot";
+
+/** The bot behind the most recently active bot chat in a workspace, or null. */
+export function botIdForWorkspace(agents: readonly AgentInfo[] | null | undefined, workspaceId: string): string | null {
+  if (!agents || !workspaceId) return null;
+  let best: AgentInfo | null = null;
+  for (const agent of agents) {
+    if (agent.workspaceId !== workspaceId || !agent.botId) continue;
+    if (!best || agent.activityAt > best.activityAt) best = agent;
+  }
+  return best?.botId ?? null;
+}
+
+const SVG_ELEMENTS = new Set(["svg", "g", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "defs", "clippath", "use"]);
+const SVG_CANONICAL: Record<string, string> = { clippath: "clipPath" };
+const SVG_ATTRS = new Map(
+  [
+    "viewBox", "preserveAspectRatio", "d", "cx", "cy", "r", "rx", "ry", "x", "y", "x1", "y1", "x2", "y2", "points", "width", "height",
+    "transform", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray",
+    "stroke-dashoffset", "fill-rule", "clip-rule", "clip-path", "opacity", "fill-opacity", "stroke-opacity", "shape-rendering", "id",
+    "clipPathUnits", "href", "xlink:href",
+  ].map((name) => [name.toLowerCase(), name]),
+);
+/** Plain tokens only: no quotes, `&`, `\`, `;` or `<`, so entities and CSS escapes cannot hide anything. */
+const SVG_VALUE = /^[\w\s#.,()%+-]*$/;
+const SVG_TAG = /<(\/?)([A-Za-z][\w:-]*)((?:\s+[^\s=>/"']+(?:\s*=\s*(?:"[^"]*"|'[^']*'))?)*)\s*(\/?)>/y;
+const SVG_ATTR = /([^\s=>/"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/g;
+export const MAX_ICON_BYTES = 8 * 1024;
+
+function safeSvgValue(name: string, value: string): boolean {
+  if (!SVG_VALUE.test(value)) return false;
+  if (name === "href" || name === "xlink:href") return /^#[\w-]+$/.test(value);
+  const refs = value.match(/url\s*\(/gi)?.length ?? 0;
+  if (!refs) return true;
+  const ok = value.match(/url\(#[\w-]+\)/g)?.length ?? 0;
+  return ok === refs && !/\burl\s+\(/i.test(value);
+}
+
+/**
+ * Re-writes svg markup from an allowlist: drawing elements and presentation attributes only, and nothing
+ * that can run or fetch (scripts, foreignObject, style, event handlers, links or url() beyond local #ids).
+ * Colours such as currentColor pass through untouched. Returns null when the markup is not a single svg,
+ * cannot be parsed, or is over `maxBytes`. The result is built from parts, never the input text.
+ */
+export function sanitizeSvg(markup: string, maxBytes = MAX_ICON_BYTES): string | null {
+  if (typeof markup !== "string" || !markup || markup.length > maxBytes) return null;
+  const src = markup.replace(/<!--[\s\S]*?-->/g, "");
+  let out = "";
+  const open: string[] = [];
+  let skip = 0;
+  let sawRoot = false;
+  let at = 0;
+  while (at < src.length) {
+    const lt = src.indexOf("<", at);
+    if (lt < 0) break;
+    SVG_TAG.lastIndex = lt;
+    const m = SVG_TAG.exec(src);
+    if (!m) return null;
+    at = lt + m[0].length;
+    const [, closing, rawName, rawAttrs, selfClose] = m;
+    const name = rawName.toLowerCase();
+    if (closing) {
+      if (skip) skip--;
+      else if (open.length && open[open.length - 1] === name) {
+        out += `</${SVG_CANONICAL[name] ?? name}>`;
+        open.pop();
+      }
+      continue;
+    }
+    if (skip || !SVG_ELEMENTS.has(name) || (!sawRoot && name !== "svg") || (sawRoot && name === "svg")) {
+      if (!sawRoot) return null;
+      if (!selfClose) skip++;
+      continue;
+    }
+    const attrs = new Map<string, string>();
+    for (const a of rawAttrs.matchAll(SVG_ATTR)) {
+      const canonical = SVG_ATTRS.get(a[1].toLowerCase());
+      const value = (a[2] ?? a[3] ?? "").trim();
+      if (!canonical || attrs.has(canonical)) continue;
+      if (safeSvgValue(canonical === "xlink:href" ? "href" : canonical, value)) attrs.set(canonical, value);
+    }
+    if (name !== "use") {
+      attrs.delete("href");
+      attrs.delete("xlink:href");
+    }
+    if (name === "svg") {
+      sawRoot = true;
+      const w = attrs.get("width");
+      const h = attrs.get("height");
+      if (!attrs.has("viewBox") && w && h && /^\d+(\.\d+)?$/.test(w) && /^\d+(\.\d+)?$/.test(h)) attrs.set("viewBox", `0 0 ${w} ${h}`);
+      attrs.delete("width");
+      attrs.delete("height");
+      out += '<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true"';
+    } else out += `<${SVG_CANONICAL[name] ?? name}`;
+    for (const [k, v] of attrs) out += ` ${k}="${v}"`;
+    if (selfClose) out += "/>";
+    else {
+      out += ">";
+      open.push(name);
+    }
+  }
+  if (!sawRoot) return null;
+  while (open.length) {
+    const name = open.pop() as string;
+    out += `</${SVG_CANONICAL[name] ?? name}>`;
+  }
+  return out.length <= maxBytes ? out : null;
+}
+
+/** An image URL safe to put in an img: http(s) or a raster data URL. */
+export function safeImageUrl(url: unknown): string | null {
+  if (typeof url !== "string" || url.length > 2_000_000) return null;
+  if (/^https?:\/\/[^\s"'<>\\]+$/i.test(url)) return url;
+  if (/^data:image\/(png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/.test(url)) return url;
+  return null;
 }
 
 /** The agent tab last seen focused in a workspace, and when (epoch ms; 0 for data saved before times were kept). */

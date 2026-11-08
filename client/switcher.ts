@@ -11,6 +11,8 @@ import {
   rememberAgent,
   type AgentInfo,
   clampLimit,
+  BOT_LABEL,
+  botIdForWorkspace,
   isAutomatedChat,
   DEFAULT_INCLUDE_SCREENS,
   isPluginScreenKey,
@@ -19,6 +21,8 @@ import {
   parsePluginScreenKey,
   parsePluginScreenUrl,
   parseScreens,
+  safeImageUrl,
+  sanitizeSvg,
   parseSkippedScreens,
   setScreenSkipped,
   trackScreenVisit,
@@ -79,6 +83,9 @@ import {
  *          with the same pushState + popstate as a hidden workspace (a plugin can only open its own screens through
  *          the API). The title is the text of `[data-testid="plugin-surface-title"]` in the screen header.
  *          This URL format is not public: re-check it, and the title test ID, on every Paseo upgrade.
+ *          The screen's own icon is the <svg> in the header badge that sits just before the title (Paseo renders
+ *          `HeaderIconBadge` then `ScreenTitle` side by side). That header DOM is not public either: re-check it
+ *          on every Paseo upgrade. The markup is sanitized before it is stored or drawn.
  *          Paseo 0.15 re-runs the plugin after each such navigation, so a disposed switcher leaves its
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
  * Outside a workspace (the home screen) with no history yet, the host is found by matching a loaded
@@ -106,6 +113,8 @@ const SCREENS_KEY = "paseo-switcher:screens";
 const INCLUDE_SCREENS_KEY = "paseo-switcher:include-screens";
 const SKIPPED_SCREENS_KEY = "paseo-switcher:skipped-screens";
 const SCREEN_TITLE = '[data-testid="plugin-surface-title"]';
+/** How far up from the title to look for the header icon badge among a sibling's children. */
+const SCREEN_ICON_LEVELS = 3;
 const BACKGROUND_KEY = "paseo-switcher:include-background";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
@@ -139,6 +148,12 @@ const LIVE_TAGS = new Set(["IFRAME", "CANVAS", "VIDEO", "AUDIO", "OBJECT", "EMBE
 
 type Paseo = PluginClientContext["paseo"];
 type Mode = "hold" | "sticky";
+/** Optional API paseo-bots publishes on `globalThis.__paseoBotsAvatars` (version 1) while it is installed. */
+interface BotAvatarsApi {
+  version: 1;
+  get(botId: string, opts: { dark: boolean }): { name?: string; svg?: string; imageUrl?: string } | null;
+  subscribe?(listener: () => void): () => void;
+}
 /* The plugin typechecks without the DOM library; this adapter works with loosely typed nodes. */
 type Node = any;
 const g = globalThis as any;
@@ -323,12 +338,26 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   /** Keeps the latest params and shown title of the screen on show; the title may appear after the route does. */
   function noteScreen(key: string, route: { pluginId: string; search: string }) {
-    const shown: string | null = doc.querySelector(SCREEN_TITLE)?.textContent?.trim() || null;
-    const next = recordScreen(screens, key, { title: shown ?? screens[key]?.title ?? screenTitle(null, route.pluginId), search: route.search });
+    const titleNode = doc.querySelector(SCREEN_TITLE);
+    const shown: string | null = titleNode?.textContent?.trim() || null;
+    // Keep the last icon seen when the header has not drawn one yet.
+    const icon = screenIconSvg(titleNode) ?? screens[key]?.icon;
+    const next = recordScreen(screens, key, { title: shown ?? screens[key]?.title ?? screenTitle(null, route.pluginId), search: route.search, icon });
     if (next === screens) return;
     screens = next;
     writeJson(SCREENS_KEY, screens);
     if (root) refreshCardsAndRender();
+  }
+
+  /** The sanitized svg of the header icon badge before the title: the nearest earlier sibling, on the title or its parents, holding an svg. */
+  function screenIconSvg(title: Node | null): string | null {
+    let node: Node | null = title;
+    for (let level = 0; node && level < SCREEN_ICON_LEVELS; level++, node = node.parentElement) {
+      const before = node.previousElementSibling;
+      const svg = before ? (before.tagName.toLowerCase() === "svg" ? before : before.querySelector("svg")) : null;
+      if (svg) return sanitizeSvg(svg.outerHTML);
+    }
+    return null;
   }
 
   function syncRoute() {
@@ -462,6 +491,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
               labels: agent.labels ?? {},
             }),
             automated: isAutomatedChat(agent.labels ?? {}),
+            botId: agent.labels?.[BOT_LABEL] || null,
           });
         }
         agents = { serverId: serverId(), list };
@@ -843,6 +873,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function close() {
     open = false;
     query = "";
+    unwatchAvatars();
     clearTimeout(showTimer);
     if (root) {
       // Canvases are reused by the next open; detach them before dropping the overlay.
@@ -914,6 +945,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     // A phone has room for one column; thumbnails would be cut off at the edges.
     const list = layout === "list" || narrow();
     root.classList.toggle("pws-dark", dark);
+    watchAvatars();
     root.classList.toggle("pws-list", list);
     root.classList.toggle("pws-entered", !fresh);
     root.style.setProperty("--pws-surface", surface);
@@ -1070,7 +1102,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     const canvas = thumbs.get(card.key);
     // A thumbnail from the other theme would flash; the placeholder reads better until it refreshes.
     if (canvas && canvas.dataset.dark === String(dark)) frame.appendChild(canvas);
-    else frame.appendChild(placeholder(info?.project ?? null, card.key, Boolean(card.screen)));
+    else frame.appendChild(placeholder(card, info?.project ?? null));
     node.appendChild(frame);
 
     const title = el("div", "pws-title");
@@ -1101,7 +1133,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
     // The lead says what the row is; the agent's state sits with its label on the right.
     const lead = el("div", "pws-lead");
-    lead.appendChild(icon(card.screen ? "puzzle" : info?.branch ? "gitBranch" : "folder", "pws-icon pws-badge-icon"));
+    lead.appendChild(leadIcon(card, info?.branch ? "gitBranch" : "folder"));
     node.appendChild(lead);
 
     const title = el("div", "pws-l1");
@@ -1147,15 +1179,108 @@ export function installSwitcher(paseo: Paseo): Switcher {
     return node;
   }
 
-  function placeholder(project: string | null, key: string, plugin = false): Node {
+  function placeholder(card: Card, project: string | null): Node {
     const box = el("div", "pws-placeholder");
-    if (plugin) {
-      const mark = el("div", "pws-initial");
-      mark.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
+    const plugin = Boolean(card.screen);
+    const avatar = card.screen ? null : botAvatar(card, 32);
+    if (plugin || avatar) {
+      const mark = el("div", avatar ? "pws-initial pws-avatar-tile" : "pws-initial");
+      mark.appendChild(avatar ?? leadIcon(card, "folder"));
       box.appendChild(mark);
-    } else if (project) box.appendChild(el("div", "pws-placeholder-project", project));
+    }
+    if (!plugin && project) box.appendChild(el("div", "pws-placeholder-project", project));
     box.appendChild(el("div", "pws-placeholder-text", plugin ? "Plugin screen" : "No preview yet"));
     return box;
+  }
+
+  /** What a row or placeholder says it is: a screen's own icon, a bot's avatar, else the generic icon. */
+  function leadIcon(card: Card, fallback: "gitBranch" | "folder"): Node {
+    if (card.screen) {
+      const own = card.screen.icon ? drawSvg(card.screen.icon, "pws-icon pws-badge-icon") : null;
+      return own ?? icon("puzzle", "pws-icon pws-badge-icon");
+    }
+    return botAvatar(card, 16) ?? icon(fallback, "pws-icon pws-badge-icon");
+  }
+
+  /** Draws svg markup that already went through sanitizeSvg (stored values are sanitized again on load). */
+  function drawSvg(markup: string, className: string, px?: number): Node | null {
+    const clean = sanitizeSvg(markup);
+    if (!clean) return null;
+    const holder = doc.createElement("div");
+    holder.innerHTML = clean;
+    const node = holder.firstChild as Node | null;
+    if (!node) return null;
+    node.setAttribute("class", className);
+    if (px) {
+      node.setAttribute("width", String(px));
+      node.setAttribute("height", String(px));
+    }
+    return node;
+  }
+
+  /**
+   * The avatar of the bot behind the workspace's latest bot chat, from paseo-bots when it is installed.
+   * Its API object is read fresh every time: Paseo re-runs plugin entries after navigations, and paseo-bots
+   * then replaces the global.
+   */
+  function botAvatar(card: Card, px: number): Node | null {
+    if (card.screen || card.serverId !== agents?.serverId) return null;
+    const botId = botIdForWorkspace(agents?.list, card.workspaceId);
+    const api = botAvatarsApi();
+    if (!botId || !api) return null;
+    let found: { name?: string; svg?: string; imageUrl?: string } | null = null;
+    try {
+      found = api.get(botId, { dark });
+    } catch {
+      return null;
+    }
+    if (!found) return null;
+    if (found.svg) {
+      const node = drawSvg(found.svg, "pws-avatar", px);
+      if (node) return node;
+    }
+    const url = safeImageUrl(found.imageUrl);
+    if (!url) return null;
+    const img = el("img", "pws-avatar pws-avatar-img") as any;
+    img.setAttribute("src", url);
+    img.setAttribute("alt", "");
+    img.setAttribute("width", String(px));
+    img.setAttribute("height", String(px));
+    img.setAttribute("referrerpolicy", "no-referrer");
+    img.setAttribute("draggable", "false");
+    return img;
+  }
+
+  function botAvatarsApi(): BotAvatarsApi | null {
+    const api = g.__paseoBotsAvatars;
+    return api && api.version === 1 && typeof api.get === "function" ? api : null;
+  }
+
+  /** Redraw while open when paseo-bots reports a change; follows the API object if paseo-bots replaced it. */
+  let avatarsApi: BotAvatarsApi | null = null;
+  let avatarsUnsubscribe: (() => void) | null = null;
+  function watchAvatars() {
+    const api = botAvatarsApi();
+    if (api === avatarsApi) return;
+    unwatchAvatars();
+    if (!api || typeof api.subscribe !== "function") return;
+    try {
+      avatarsUnsubscribe = api.subscribe(() => {
+        if (root) render();
+      });
+      avatarsApi = api;
+    } catch {
+      avatarsUnsubscribe = null;
+    }
+  }
+  function unwatchAvatars() {
+    try {
+      avatarsUnsubscribe?.();
+    } catch {
+      // Nothing to undo.
+    }
+    avatarsUnsubscribe = null;
+    avatarsApi = null;
   }
 
   function swapThumb(key: string, canvas: Node) {
@@ -1660,6 +1785,10 @@ const CSS = `
 .pws-icon { width: 13px; height: 13px; flex: 0 0 auto; }
 .pws-icon.pws-badge-icon { width: 14px; height: 14px; color: var(--pws-muted); }
 .pws-initial .pws-badge-icon { width: 20px; height: 20px; }
+.pws-avatar { width: 16px; height: 16px; flex: 0 0 auto; display: block; }
+.pws-avatar-img { object-fit: cover; border-radius: 50%; }
+.pws-initial.pws-avatar-tile { background: none; }
+.pws-initial .pws-avatar { width: 32px; height: 32px; }
 .pws-placeholder-project { color: var(--pws-muted); font-size: 13px; font-weight: 550; padding: 0 12px; text-align: center; overflow-wrap: anywhere; }
 .pws-pr { color: var(--pws-fg); }
 .pws-pr-open .pws-icon { color: var(--pws-ok); }
