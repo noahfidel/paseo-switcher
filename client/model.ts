@@ -300,13 +300,54 @@ export function recordScreen(screens: Screens, key: string, meta: ScreenMeta): S
   return { ...screens, [key]: { title: meta.title, search: meta.search } };
 }
 
-/** Drops details of screens no longer in the visit history. Returns `screens` itself when none were. */
-export function pruneScreens(screens: Screens, visits: Visits): Screens {
-  const stale = Object.keys(screens).filter((k) => !Object.hasOwn(visits, k));
-  if (!stale.length) return screens;
+/**
+ * Drops details of screens no longer in the visit history, except skipped ones (they stay so they can be
+ * switched back on). Returns `screens` itself when none were dropped.
+ */
+export function pruneScreens(screens: Screens, visits: Visits, skipped: readonly string[] = []): Screens {
+  const keep = (k: string) => Object.hasOwn(visits, k) || skipped.includes(k);
+  if (Object.keys(screens).every(keep)) return screens;
   const kept: Screens = {};
-  for (const [k, v] of Object.entries(screens)) if (Object.hasOwn(visits, k)) kept[k] = v;
+  for (const [k, v] of Object.entries(screens)) if (keep(k)) kept[k] = v;
   return kept;
+}
+
+/** Screens the user switched off (key = host + plugin + screen, params ignored). Absent from the list means included. */
+export function parseSkippedScreens(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const keys: string[] = [];
+  for (const k of value) if (typeof k === "string" && parsePluginScreenKey(k) && !keys.includes(k)) keys.push(k);
+  return keys;
+}
+
+/** Returns `skipped` itself when nothing changes. */
+export function setScreenSkipped(skipped: readonly string[], key: string, skip: boolean): string[] {
+  if (skipped.includes(key) === skip) return skipped as string[];
+  return skip ? [...skipped, key] : skipped.filter((k) => k !== key);
+}
+
+/** A plugin screen left sooner than this records no visit, so redirect screens never reach the recents. */
+export const SCREEN_DWELL_MS = 1000;
+
+export interface PendingScreenVisit {
+  key: string;
+  since: number;
+  recorded: boolean;
+}
+
+/**
+ * Feed it the plugin screen key on show (null on any other page, or for a skipped screen) on every route check.
+ * It reports the visit once the screen has stayed open for SCREEN_DWELL_MS, stamped with when it was opened.
+ */
+export function trackScreenVisit(
+  pending: PendingScreenVisit | null,
+  key: string | null,
+  now: number,
+): { pending: PendingScreenVisit | null; record: { key: string; at: number } | null } {
+  if (!key) return { pending: null, record: null };
+  if (!pending || pending.key !== key) return { pending: { key, since: now, recorded: false }, record: null };
+  if (pending.recorded || now - pending.since < SCREEN_DWELL_MS) return { pending, record: null };
+  return { pending: { ...pending, recorded: true }, record: { key, at: pending.since } };
 }
 
 function screenCard(key: string, meta: ScreenMeta | undefined): Card | null {
@@ -321,9 +362,10 @@ function screenCard(key: string, meta: ScreenMeta | undefined): Card | null {
   };
 }
 
-/** The visit order to use: plugin screens only when they are included. */
-export function visibleKeys(mru: readonly string[], includeScreens: boolean): string[] {
-  return includeScreens ? [...mru] : mru.filter((key) => !isPluginScreenKey(key));
+/** The visit order to use: plugin screens only when they are included, minus any skipped screen. */
+export function visibleKeys(mru: readonly string[], includeScreens: boolean, skipped: readonly string[] = []): string[] {
+  if (!includeScreens) return mru.filter((key) => !isPluginScreenKey(key));
+  return skipped.length ? mru.filter((key) => !skipped.includes(key)) : [...mru];
 }
 
 export const DEFAULT_INCLUDE_SCREENS = true;

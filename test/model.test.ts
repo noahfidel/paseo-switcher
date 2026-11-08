@@ -54,6 +54,12 @@ import {
   visibleKeys,
   DEFAULT_INCLUDE_SCREENS,
   parseIncludeScreens,
+  parseSkippedScreens,
+  setScreenSkipped,
+  pruneScreens,
+  trackScreenVisit,
+  SCREEN_DWELL_MS,
+  type PendingScreenVisit,
 } from "../client/model.ts";
 
 const S = "srv_a";
@@ -693,6 +699,73 @@ test("the plugin screens setting defaults on and reads only booleans", () => {
   assert.equal(parseIncludeScreens("no"), true);
   assert.equal(parseIncludeScreens(false), false);
   assert.equal(parseIncludeScreens(true), true);
+});
+
+test("the skipped screens list is read defensively and keeps only plugin screen keys once each", () => {
+  const k = pluginScreenKey(S, "paseo-bots", "bots");
+  assert.deepEqual(parseSkippedScreens(undefined), []);
+  assert.deepEqual(parseSkippedScreens("x"), []);
+  assert.deepEqual(parseSkippedScreens({ [k]: true }), []);
+  assert.deepEqual(parseSkippedScreens([k, k, `${S}:ws`, 3, null, "plugin-screen|bad"]), [k]);
+});
+
+test("setting a screen skipped adds it once, and unskipping removes it", () => {
+  const k = pluginScreenKey(S, "paseo-bots", "bots");
+  const on = setScreenSkipped([], k, true);
+  assert.deepEqual(on, [k]);
+  assert.equal(setScreenSkipped(on, k, true), on);
+  assert.deepEqual(setScreenSkipped(on, k, false), []);
+});
+
+test("a skipped screen's old entries are hidden from the order, cards and the quick tap; other screens stay", () => {
+  const bots = pluginScreenKey(S, "paseo-bots", "bots");
+  const board = pluginScreenKey(S, "flowly", "board");
+  const mru = [bots, `${S}:a`, board, `${S}:b`];
+  assert.deepEqual(visibleKeys(mru, true, [bots]), [`${S}:a`, board, `${S}:b`]);
+  assert.deepEqual(visibleKeys(mru, true, []), mru);
+  assert.deepEqual(visibleKeys(mru, false, [bots]), [`${S}:a`, `${S}:b`]);
+  assert.equal(previousKey(visibleKeys(mru, true, [bots]), `${S}:a`), board);
+  const screens = { [bots]: { title: "Bots", search: "" }, [board]: { title: "Board", search: "" } };
+  const cards = buildCards(visibleKeys(mru, true, [bots]), S, list(info("a", 1), info("b", 1)), 5, screens);
+  assert.deepEqual(cards.map((c) => c.key), [`${S}:a`, board, `${S}:b`]);
+});
+
+test("a skipped screen keeps its title in the store even with no visits, so it stays in the settings list", () => {
+  const bots = pluginScreenKey(S, "paseo-bots", "bots");
+  const board = pluginScreenKey(S, "flowly", "board");
+  const screens = { [bots]: { title: "Bots", search: "" }, [board]: { title: "Board", search: "" } };
+  const visits = { [`${S}:a`]: 1 };
+  assert.deepEqual(Object.keys(pruneScreens(screens, visits, [bots])), [bots]);
+  assert.deepEqual(Object.keys(pruneScreens(screens, visits)), []);
+  assert.equal(pruneScreens({ [bots]: screens[bots] }, visits, [bots]).hasOwnProperty(bots), true);
+});
+
+test("a screen left in under a second records no visit; one left after a second does, at the time it was opened", () => {
+  const k = pluginScreenKey(S, "paseo-bots", "bots");
+  const t0 = 1_000_000;
+  // Opened, then left (route is a workspace) 400 ms later: nothing recorded.
+  let step = trackScreenVisit(null, k, t0);
+  assert.equal(step.record, null);
+  step = trackScreenVisit(step.pending, k, t0 + 400);
+  assert.equal(step.record, null);
+  step = trackScreenVisit(step.pending, null, t0 + 500);
+  assert.equal(step.record, null);
+  assert.equal(step.pending, null);
+  // Opened and still there after the dwell: recorded once, at the open time.
+  let kept: PendingScreenVisit | null = null;
+  step = trackScreenVisit(kept, k, t0);
+  step = trackScreenVisit(step.pending, k, t0 + SCREEN_DWELL_MS - 1);
+  assert.equal(step.record, null);
+  step = trackScreenVisit(step.pending, k, t0 + SCREEN_DWELL_MS);
+  assert.deepEqual(step.record, { key: k, at: t0 });
+  step = trackScreenVisit(step.pending, k, t0 + SCREEN_DWELL_MS + 300);
+  assert.equal(step.record, null);
+  // Moving straight to another screen restarts the clock.
+  const other = pluginScreenKey(S, "flowly", "board");
+  step = trackScreenVisit(step.pending, other, t0 + 5000);
+  assert.equal(step.record, null);
+  assert.deepEqual(step.pending, { key: other, since: t0 + 5000, recorded: false });
+  assert.equal(SCREEN_DWELL_MS, 1000);
 });
 
 const FACTS_NOW = 1_700_000_000_000;
