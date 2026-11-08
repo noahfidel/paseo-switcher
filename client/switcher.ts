@@ -23,6 +23,7 @@ import {
   parseScreens,
   safeImageUrl,
   sanitizeSvg,
+  scopeSvgIds,
   parseSkippedScreens,
   setScreenSkipped,
   trackScreenVisit,
@@ -83,8 +84,8 @@ import {
  *          with the same pushState + popstate as a hidden workspace (a plugin can only open its own screens through
  *          the API). The title is the text of `[data-testid="plugin-surface-title"]` in the screen header.
  *          This URL format is not public: re-check it, and the title test ID, on every Paseo upgrade.
- *          The screen's own icon is the <svg> in the header badge that sits just before the title (Paseo renders
- *          `HeaderIconBadge` then `ScreenTitle` side by side). That header DOM is not public either: re-check it
+ *          The screen's own icon is the <svg> in the header badge that is the title's previous sibling (Paseo renders
+ *          `HeaderIconBadge` then `ScreenTitle` in one fragment, so the badge is the title's previous sibling). That header DOM is not public either: re-check it
  *          on every Paseo upgrade. The markup is sanitized before it is stored or drawn.
  *          Paseo 0.15 re-runs the plugin after each such navigation, so a disposed switcher leaves its
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
@@ -113,8 +114,6 @@ const SCREENS_KEY = "paseo-switcher:screens";
 const INCLUDE_SCREENS_KEY = "paseo-switcher:include-screens";
 const SKIPPED_SCREENS_KEY = "paseo-switcher:skipped-screens";
 const SCREEN_TITLE = '[data-testid="plugin-surface-title"]';
-/** How far up from the title to look for the header icon badge among a sibling's children. */
-const SCREEN_ICON_LEVELS = 3;
 const BACKGROUND_KEY = "paseo-switcher:include-background";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
@@ -340,8 +339,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function noteScreen(key: string, route: { pluginId: string; search: string }) {
     const titleNode = doc.querySelector(SCREEN_TITLE);
     const shown: string | null = titleNode?.textContent?.trim() || null;
-    // Keep the last icon seen when the header has not drawn one yet.
-    const icon = screenIconSvg(titleNode) ?? screens[key]?.icon;
+    // With the title on show, its badge decides: no badge clears a stale or wrongly captured icon.
+    // Before the title is drawn, keep what was stored.
+    const icon = titleNode ? screenIconSvg(titleNode) ?? undefined : screens[key]?.icon;
     const next = recordScreen(screens, key, { title: shown ?? screens[key]?.title ?? screenTitle(null, route.pluginId), search: route.search, icon });
     if (next === screens) return;
     screens = next;
@@ -349,15 +349,12 @@ export function installSwitcher(paseo: Paseo): Switcher {
     if (root) refreshCardsAndRender();
   }
 
-  /** The sanitized svg of the header icon badge before the title: the nearest earlier sibling, on the title or its parents, holding an svg. */
-  function screenIconSvg(title: Node | null): string | null {
-    let node: Node | null = title;
-    for (let level = 0; node && level < SCREEN_ICON_LEVELS; level++, node = node.parentElement) {
-      const before = node.previousElementSibling;
-      const svg = before ? (before.tagName.toLowerCase() === "svg" ? before : before.querySelector("svg")) : null;
-      if (svg) return sanitizeSvg(svg.outerHTML);
-    }
-    return null;
+  /** The sanitized svg of the header icon badge: the title's own previous sibling (Paseo renders badge, then title, in one fragment). */
+  function screenIconSvg(title: Node): string | null {
+    const before = title.previousElementSibling;
+    if (!before) return null;
+    const svg = before.tagName.toLowerCase() === "svg" ? before : before.querySelector("svg");
+    return svg ? sanitizeSvg(svg.outerHTML) : null;
   }
 
   function syncRoute() {
@@ -1203,11 +1200,12 @@ export function installSwitcher(paseo: Paseo): Switcher {
   }
 
   /** Draws svg markup that already went through sanitizeSvg (stored values are sanitized again on load). */
+  let svgDraws = 0;
   function drawSvg(markup: string, className: string, px?: number): Node | null {
     const clean = sanitizeSvg(markup);
     if (!clean) return null;
     const holder = doc.createElement("div");
-    holder.innerHTML = clean;
+    holder.innerHTML = scopeSvgIds(clean, `pws-s${++svgDraws}-`);
     const node = holder.firstChild as Node | null;
     if (!node) return null;
     node.setAttribute("class", className);
@@ -1259,16 +1257,24 @@ export function installSwitcher(paseo: Paseo): Switcher {
   /** Redraw while open when paseo-bots reports a change; follows the API object if paseo-bots replaced it. */
   let avatarsApi: BotAvatarsApi | null = null;
   let avatarsUnsubscribe: (() => void) | null = null;
+  let avatarsRedraw = false;
   function watchAvatars() {
     const api = botAvatarsApi();
     if (api === avatarsApi) return;
     unwatchAvatars();
     if (!api || typeof api.subscribe !== "function") return;
+    // Set before subscribing: a subscribe that calls back at once must not look like a new object.
+    avatarsApi = api;
     try {
       avatarsUnsubscribe = api.subscribe(() => {
-        if (root) render();
+        // Redraw after the current call stack, once per burst, so a callback can never re-enter a render.
+        if (avatarsRedraw) return;
+        avatarsRedraw = true;
+        win.queueMicrotask(() => {
+          avatarsRedraw = false;
+          if (root && avatarsApi === api) render();
+        });
       });
-      avatarsApi = api;
     } catch {
       avatarsUnsubscribe = null;
     }

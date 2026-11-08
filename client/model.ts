@@ -725,6 +725,30 @@ export function sanitizeSvg(markup: string, maxBytes = MAX_ICON_BYTES): string |
   return out.length <= maxBytes ? out : null;
 }
 
+/**
+ * Prefixes every id in sanitized svg and points local refs at the new ids, so two drawings of one icon never
+ * share ids and an id cannot shadow an element on the page. A ref to an id that is not in this svg is dropped
+ * (the whole attribute). Expects `sanitizeSvg` output.
+ */
+export function scopeSvgIds(svg: string, prefix: string): string {
+  const ids = new Set([...svg.matchAll(/\sid="([\w-]+)"/g)].map((m) => m[1]));
+  if (!ids.size && !/href="#|url\(#/.test(svg)) return svg;
+  return svg.replace(/\s([\w:-]+)="([^"]*)"/g, (whole, name: string, value: string) => {
+    if (name === "id") return ` id="${prefix}${value}"`;
+    if (name === "href" || name === "xlink:href") {
+      const id = value.slice(1);
+      return ids.has(id) ? ` ${name}="#${prefix}${id}"` : "";
+    }
+    if (!/url\(/.test(value)) return whole;
+    let ok = true;
+    const next = value.replace(/url\(#([\w-]+)\)/g, (_, id: string) => {
+      if (!ids.has(id)) ok = false;
+      return `url(#${prefix}${id})`;
+    });
+    return ok ? ` ${name}="${next}"` : "";
+  });
+}
+
 /** An image URL safe to put in an img: http(s) or a raster data URL. */
 export function safeImageUrl(url: unknown): string | null {
   if (typeof url !== "string" || url.length > 2_000_000) return null;

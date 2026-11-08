@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BOT_LABEL, botIdForWorkspace, parseScreens, pluginScreenKey, recordScreen, safeImageUrl, sanitizeSvg, type AgentInfo } from "../client/model.ts";
+import { BOT_LABEL, botIdForWorkspace, parseScreens, pluginScreenKey, recordScreen, safeImageUrl, sanitizeSvg, scopeSvgIds, type AgentInfo } from "../client/model.ts";
 
 /** The output without the root's fixed namespace and aria attributes, so patterns like "http" only match content. */
 const body = (svg: string) => svg.replace(/ xmlns="[^"]*"| aria-hidden="true"/g, "");
@@ -149,4 +149,43 @@ test("parseScreens reads old entries without an icon, and re-sanitizes stored ic
   assert.doesNotMatch(parsed[KEY_T].icon ?? "", /script|onclick/);
   assert.match(parsed[KEY_T].icon ?? "", /M1 1/);
   assert.deepEqual(parsed[KEY_U], { title: "V", search: "" });
+});
+
+test("recordScreen clears a stored icon when the new record has none", () => {
+  const icon = sanitizeSvg(LUCIDE)!;
+  const withIcon = recordScreen({}, KEY, { title: "T", search: "", icon });
+  const cleared = recordScreen(withIcon, KEY, { title: "T", search: "" });
+  assert.notEqual(cleared, withIcon);
+  assert.deepEqual(cleared[KEY], { title: "T", search: "" });
+});
+
+const WITH_REFS = sanitizeSvg(
+  '<svg viewBox="0 0 8 8"><defs><path id="p" d="M1 1"/><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><use href="#p"/><use href="#gone"/><g clip-path="url(#c)"><rect width="2" height="2" fill="url(#missing)"/></g></svg>',
+)!;
+
+test("scopeSvgIds gives every id the prefix and points local refs at the new ids", () => {
+  const out = scopeSvgIds(WITH_REFS, "pws7-");
+  assert.match(out, /id="pws7-p"/);
+  assert.match(out, /id="pws7-c"/);
+  assert.match(out, /href="#pws7-p"/);
+  assert.match(out, /clip-path="url\(#pws7-c\)"/);
+  assert.doesNotMatch(out, /id="p"|id="c"|href="#p"|url\(#c\)/);
+});
+
+test("scopeSvgIds drops refs that do not point at an id inside the svg", () => {
+  const out = scopeSvgIds(WITH_REFS, "pws7-");
+  assert.doesNotMatch(out, /gone|missing/);
+  assert.match(out, /<rect width="2" height="2"\/>/);
+});
+
+test("scopeSvgIds gives two draws of the same svg different ids", () => {
+  const a = scopeSvgIds(WITH_REFS, "pws1-");
+  const b = scopeSvgIds(WITH_REFS, "pws2-");
+  const ids = (s: string) => [...s.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(ids(a).filter((id) => ids(b).includes(id)).length, 0);
+});
+
+test("scopeSvgIds leaves an svg without ids alone", () => {
+  const plain = sanitizeSvg(LUCIDE)!;
+  assert.equal(scopeSvgIds(plain, "pws1-"), plain);
 });
