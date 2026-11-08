@@ -26,6 +26,7 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
     const [layout, setLayout] = useState<Layout>(switcher.getLayout());
     const [shortcut, setShortcut] = useState<Shortcut>(switcher.getShortcut());
     const [includeBackground, setIncludeBackground] = useState(switcher.getIncludeBackground());
+    const [includeScreens, setIncludeScreens] = useState(switcher.getIncludeScreens());
     const [countMessages, setCountMessages] = useState(switcher.getCountMessages());
     return (
       <SettingsSection title="Switcher">
@@ -67,6 +68,15 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
             onValueChange={(value) => {
               switcher.setIncludeBackground(value);
               setIncludeBackground(switcher.getIncludeBackground());
+            }}
+          />
+          <SettingsSwitch
+            label="Include plugin screens"
+            hint="Plugin screens you open (a board, Bots, Schedules) become stops in the list, ordered by when you last visited, and reopen with the same settings. They count toward the number shown. Off: none are listed or remembered."
+            value={includeScreens}
+            onValueChange={(value) => {
+              switcher.setIncludeScreens(value);
+              setIncludeScreens(switcher.getIncludeScreens());
             }}
           />
           <SettingsSwitch

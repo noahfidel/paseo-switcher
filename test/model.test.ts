@@ -41,6 +41,18 @@ import {
   parseVisits,
   recentKeys,
   recordVisit,
+  parsePluginScreenUrl,
+  pluginScreenUrl,
+  pluginScreenKey,
+  isPluginScreenKey,
+  keyServerId,
+  prettifyPluginId,
+  screenTitle,
+  parseScreens,
+  recordScreen,
+  visibleKeys,
+  DEFAULT_INCLUDE_SCREENS,
+  parseIncludeScreens,
 } from "../client/model.ts";
 
 const S = "srv_a";
@@ -551,4 +563,133 @@ test("userMessageAt counts the first message of an unlabelled chat", () => {
 
 test("userMessageAt is null without a message", () => {
   assert.equal(userMessageAt(automated("paseo-bots.routine", null)), null);
+});
+
+// ---- plugin screens ------------------------------------------------------------------------------
+
+const screen = (pluginId: string, screenId: string, search = "", title = pluginId) => ({ pluginId, screenId, search, title });
+
+test("a plugin screen URL parses to host, plugin and screen, with its params", () => {
+  assert.deepEqual(parsePluginScreenUrl("/h/srv_a/plugin/flowly/surface/board"), {
+    serverId: "srv_a", pluginId: "flowly", screenId: "board", search: "",
+  });
+  assert.deepEqual(parsePluginScreenUrl("/h/srv_a/plugin/flowly/surface/board/", "?param.id=7&param.tab=a%20b"), {
+    serverId: "srv_a", pluginId: "flowly", screenId: "board", search: "?param.id=7&param.tab=a%20b",
+  });
+});
+
+test("plugin screen URL segments are decoded", () => {
+  assert.deepEqual(parsePluginScreenUrl("/h/srv%3Aa/plugin/%40x%2Fbots/surface/my%20screen"), {
+    serverId: "srv:a", pluginId: "@x/bots", screenId: "my screen", search: "",
+  });
+});
+
+test("the legacy sidebar form and non-plugin paths are not plugin screens", () => {
+  assert.equal(parsePluginScreenUrl("/h/srv_a/plugin/flowly/sidebar/board"), null);
+  assert.equal(parsePluginScreenUrl("/h/srv_a/workspace/ws1"), null);
+  assert.equal(parsePluginScreenUrl("/"), null);
+  assert.equal(parsePluginScreenUrl("/h/srv_a/plugin/flowly/surface/board/extra"), null);
+  assert.equal(parsePluginScreenUrl("/h/%E0%A4%A/plugin/flowly/surface/board"), null);
+});
+
+test("the reopen URL rebuilds the route with encoded segments and the latest params", () => {
+  assert.equal(pluginScreenUrl({ serverId: "srv_a", pluginId: "flowly", screenId: "board", search: "" }), "/h/srv_a/plugin/flowly/surface/board");
+  assert.equal(
+    pluginScreenUrl({ serverId: "srv:a", pluginId: "@x/bots", screenId: "my screen", search: "?param.id=7" }),
+    "/h/srv%3Aa/plugin/%40x%2Fbots/surface/my%20screen?param.id=7",
+  );
+  const route = parsePluginScreenUrl("/h/srv%3Aa/plugin/%40x%2Fbots/surface/my%20screen", "?param.k=%26");
+  assert.deepEqual(parsePluginScreenUrl(...(pluginScreenUrl(route!).split("?").map((x, i) => (i ? `?${x}` : x)) as [string, string])), route);
+});
+
+test("a screen key ignores params, differs per screen and host, and never looks like a workspace key", () => {
+  const a = pluginScreenKey("srv_a", "flowly", "board");
+  assert.equal(a, pluginScreenKey("srv_a", "flowly", "board"));
+  assert.notEqual(a, pluginScreenKey("srv_a", "flowly", "list"));
+  assert.notEqual(a, pluginScreenKey("srv_b", "flowly", "board"));
+  assert.ok(isPluginScreenKey(a));
+  assert.ok(!isPluginScreenKey(`${S}:ws1`));
+  assert.equal(keyServerId(a), "srv_a");
+  assert.equal(keyServerId(`${S}:ws1`), S);
+  assert.equal(keyServerId(pluginScreenKey("a|b:c", "p", "s")), "a|b:c");
+});
+
+test("a screen label is its title as shown, else a prettified plugin id", () => {
+  assert.equal(screenTitle("  Flowly board ", "flowly"), "Flowly board");
+  assert.equal(screenTitle("", "paseo-bots"), "Paseo Bots");
+  assert.equal(screenTitle(null, "@acme/linear_sync"), "Acme Linear Sync");
+  assert.equal(prettifyPluginId("flowly"), "Flowly");
+});
+
+test("recording a screen keeps only the latest params and title, and reports no change when identical", () => {
+  let screens = parseScreens(null);
+  const key = pluginScreenKey(S, "flowly", "board");
+  screens = recordScreen(screens, key, { title: "Board", search: "?param.id=1" });
+  const same = recordScreen(screens, key, { title: "Board", search: "?param.id=1" });
+  assert.equal(same, screens);
+  const next = recordScreen(screens, key, { title: "Board 2", search: "?param.id=2" });
+  assert.deepEqual(next[key], { title: "Board 2", search: "?param.id=2" });
+  assert.deepEqual(Object.keys(next), [key]);
+});
+
+test("stored screens are read defensively", () => {
+  const k = pluginScreenKey(S, "p", "s");
+  assert.deepEqual(parseScreens({ [k]: { title: "T", search: "?a=1" }, [`${S}:ws`]: { title: "T", search: "" }, bad: 3, worse: { title: 1 } }), {
+    [k]: { title: "T", search: "?a=1" },
+  });
+  assert.deepEqual(parseScreens([]), {});
+  assert.deepEqual(parseScreens("x"), {});
+});
+
+test("plugin screens and workspaces mix by visit order within the limit", () => {
+  const board = pluginScreenKey(S, "flowly", "board");
+  const bots = pluginScreenKey(S, "paseo-bots", "bots");
+  const mru = [`${S}:a`, board, `${S}:b`, bots, `${S}:c`];
+  const screens = { [board]: { title: "Board", search: "?param.id=1" }, [bots]: { title: "Bots", search: "" } };
+  const cards = buildCards(mru, S, list(info("a", 1), info("b", 1), info("c", 1)), 4, screens);
+  assert.deepEqual(cards.map((c) => c.key), [`${S}:a`, board, `${S}:b`, bots]);
+  assert.equal(cards[0].screen, undefined);
+  assert.deepEqual(cards[1].screen, { pluginId: "flowly", screenId: "board", title: "Board", search: "?param.id=1" });
+  assert.equal(cards[1].info, null);
+  assert.equal(cards[1].serverId, S);
+});
+
+test("a screen with no stored details is skipped, and without screens no screen is listed", () => {
+  const board = pluginScreenKey(S, "flowly", "board");
+  const mru = [board, `${S}:a`];
+  assert.deepEqual(buildCards(mru, S, list(info("a", 1)), 5, {}).map((c) => c.key), [`${S}:a`]);
+  assert.deepEqual(buildCards(mru, S, list(info("a", 1)), 5, null).map((c) => c.key), [`${S}:a`]);
+  assert.deepEqual(buildCards(mru, S, list(info("a", 1)), 5).map((c) => c.key), [`${S}:a`]);
+});
+
+test("screens fill the limit before workspaces by activity do", () => {
+  const board = pluginScreenKey(S, "flowly", "board");
+  const cards = buildCards([board], S, list(info("a", 5), info("b", 9)), 2, { [board]: { title: "Board", search: "" } });
+  assert.deepEqual(cards.map((c) => c.key), [board, `${S}:b`]);
+});
+
+test("visiting a screen again moves it up without a second entry, params stay out of the key", () => {
+  const key = pluginScreenKey(S, "flowly", "board");
+  let visits = recordVisit({}, `${S}:a`, 10);
+  visits = recordVisit(visits, key, 20);
+  visits = recordVisit(visits, `${S}:b`, 30);
+  visits = recordVisit(visits, key, 40);
+  assert.deepEqual(recentKeys(visits), [key, `${S}:b`, `${S}:a`]);
+});
+
+test("with plugin screens off, their keys leave the order used for cards and the quick tap", () => {
+  const board = pluginScreenKey(S, "flowly", "board");
+  const mru = [board, `${S}:a`, `${S}:b`];
+  assert.deepEqual(visibleKeys(mru, true), mru);
+  assert.deepEqual(visibleKeys(mru, false), [`${S}:a`, `${S}:b`]);
+  assert.equal(previousKey(visibleKeys(mru, false), `${S}:a`), `${S}:b`);
+  assert.equal(previousKey(visibleKeys(mru, true), `${S}:a`), board);
+});
+
+test("the plugin screens setting defaults on and reads only booleans", () => {
+  assert.equal(DEFAULT_INCLUDE_SCREENS, true);
+  assert.equal(parseIncludeScreens(undefined), true);
+  assert.equal(parseIncludeScreens("no"), true);
+  assert.equal(parseIncludeScreens(false), false);
+  assert.equal(parseIncludeScreens(true), true);
 });

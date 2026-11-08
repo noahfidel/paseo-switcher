@@ -10,6 +10,21 @@ import {
   type AgentInfo,
   clampLimit,
   isAutomatedChat,
+  DEFAULT_INCLUDE_SCREENS,
+  isPluginScreenKey,
+  keyServerId,
+  parseIncludeScreens,
+  parsePluginScreenKey,
+  parsePluginScreenUrl,
+  parseScreens,
+  pluginScreenKey,
+  pluginScreenUrl,
+  prettifyPluginId,
+  pruneScreens,
+  recordScreen,
+  screenTitle,
+  visibleKeys,
+  type Screens,
   DEFAULT_LAYOUT,
   DEFAULT_INCLUDE_BACKGROUND,
   DEFAULT_COUNT_MESSAGES,
@@ -55,6 +70,10 @@ import {
  *          when it is its pane's active tab; read to remember the last focused agent
  * - open:  `?open=agent:<agentId>` on the workspace route makes Paseo reveal that agent's tab
  *          (Paseo marks this input COMPAT(workspace-open-url), kept for bookmarks and deep links)
+ * - screen: plugin screens are `/h/<serverId>/plugin/<pluginId>/surface/<screenId>?param.<key>=<value>`, reopened
+ *          with the same pushState + popstate as a hidden workspace (a plugin can only open its own screens through
+ *          the API). The title is the text of `[data-testid="plugin-surface-title"]` in the screen header.
+ *          This URL format is not public: re-check it, and the title test ID, on every Paseo upgrade.
  * Outside a workspace (the home screen) with no history yet, the host is found by matching a loaded
  * workspace to its sidebar row, or, with the sidebar hidden, from the app's saved host list when it
  * has a single host (localStorage `@paseo:daemon-registry`).
@@ -76,6 +95,9 @@ const COUNT_MESSAGES_KEY = "paseo-switcher:count-messages";
 const LIMIT_KEY = "paseo-switcher:limit";
 const LAYOUT_KEY = "paseo-switcher:layout";
 const SHORTCUT_KEY = "paseo-switcher:shortcut";
+const SCREENS_KEY = "paseo-switcher:screens";
+const INCLUDE_SCREENS_KEY = "paseo-switcher:include-screens";
+const SCREEN_TITLE = '[data-testid="plugin-surface-title"]';
 const BACKGROUND_KEY = "paseo-switcher:include-background";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
@@ -130,6 +152,8 @@ export interface Switcher {
   setShortcut(shortcut: Shortcut): void;
   getIncludeBackground(): boolean;
   setIncludeBackground(include: boolean): void;
+  getIncludeScreens(): boolean;
+  setIncludeScreens(include: boolean): void;
   getCountMessages(): boolean;
   setCountMessages(count: boolean): void;
   /** Called after the shortcut changes, so labels that name it can follow. Returns an unsubscribe. */
@@ -150,6 +174,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     setShortcut() {},
     getIncludeBackground: () => DEFAULT_INCLUDE_BACKGROUND,
     setIncludeBackground() {},
+    getIncludeScreens: () => DEFAULT_INCLUDE_SCREENS,
+    setIncludeScreens() {},
     getCountMessages: () => DEFAULT_COUNT_MESSAGES,
     setCountMessages() {},
     onShortcutChange: () => () => {},
@@ -165,8 +191,12 @@ export function installSwitcher(paseo: Paseo): Switcher {
   const keys = claimKeys(() => open, () => shortcut);
 
   let visits: Visits = parseVisits(readJson(VISITS_KEY, null)) ?? migrateMru(readJson(MRU_KEY, []), Date.now());
-  /** Visited workspace keys, most recent first; derived from `visits`. */
-  let mru: string[] = recentKeys(visits);
+  /** Also list plugin screens (and record visits to them). */
+  let includeScreens = parseIncludeScreens(readJson(INCLUDE_SCREENS_KEY, DEFAULT_INCLUDE_SCREENS));
+  /** Latest title and params of each visited plugin screen. */
+  let screens: Screens = parseScreens(readJson(SCREENS_KEY, {}));
+  /** Visited keys (workspaces, and plugin screens when included), most recent first; derived from `visits`. */
+  let mru: string[] = visibleKeys(recentKeys(visits), includeScreens);
   /** Count a message you sent in a workspace as a visit to it. */
   let countMessages = parseCountMessages(readJson(COUNT_MESSAGES_KEY, DEFAULT_COUNT_MESSAGES));
   let limit = clampLimit(readJson(LIMIT_KEY, DEFAULT_LIMIT));
@@ -239,24 +269,56 @@ export function installSwitcher(paseo: Paseo): Switcher {
     return match ? workspaceKey(decodeURIComponent(match[1]), decodeURIComponent(match[2])) : null;
   }
 
+  /** The plugin screen on show, when plugin screens are included. */
+  function currentScreen() {
+    return includeScreens ? parsePluginScreenUrl(win.location.pathname, win.location.search) : null;
+  }
+
+  /** The workspace or plugin screen on show: the current stop of the switcher. */
+  function currentStopKey(): string | null {
+    const workspace = currentKey();
+    if (workspace) return workspace;
+    const screen = currentScreen();
+    return screen ? pluginScreenKey(screen.serverId, screen.pluginId, screen.screenId) : null;
+  }
+
   function serverId(): string | null {
-    const key = currentKey() ?? mru[0];
-    return key ? splitKey(key).serverId : homeServer;
+    const key = currentStopKey() ?? mru[0];
+    return key ? keyServerId(key) : homeServer;
   }
 
   function setVisits(next: Visits) {
     if (next === visits) return;
     visits = next;
-    mru = recentKeys(visits);
+    mru = visibleKeys(recentKeys(visits), includeScreens);
     writeJson(VISITS_KEY, visits);
+    const kept = pruneScreens(screens, visits);
+    if (kept !== screens) {
+      screens = kept;
+      writeJson(SCREENS_KEY, screens);
+    }
+  }
+
+  /** Keeps the latest params and shown title of the screen on show; the title may appear after the route does. */
+  function noteScreen(key: string, route: { pluginId: string; search: string }) {
+    const shown: string | null = doc.querySelector(SCREEN_TITLE)?.textContent?.trim() || null;
+    const next = recordScreen(screens, key, { title: shown ?? screens[key]?.title ?? screenTitle(null, route.pluginId), search: route.search });
+    if (next === screens) return;
+    screens = next;
+    writeJson(SCREENS_KEY, screens);
+    if (root) refreshCardsAndRender();
   }
 
   function syncRoute() {
-    const key = currentKey();
-    if (!key || key === lastKey) return;
-    lastKey = key;
-    setVisits(recordVisit(visits, key, Date.now()));
-    watchPane();
+    const screen = currentScreen();
+    const key = currentStopKey();
+    if (!key || (key === lastKey && !screen)) return;
+    if (key !== lastKey) {
+      lastKey = key;
+      setVisits(recordVisit(visits, key, Date.now()));
+    }
+    if (screen && !currentKey()) noteScreen(key, screen);
+    if (currentKey()) watchPane();
   }
 
   /** Folds the loaded agents' last messages into the visit times, when that setting is on. */
@@ -693,8 +755,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     mode = nextMode;
     open = true;
     query = "";
-    cards = buildCards(mru, serverId(), workspaces, limit);
-    index = direction === 1 ? initialIndex(cards, currentKey()) : wrap(-1, cards.length);
+    cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null);
+    index = direction === 1 ? initialIndex(cards, currentStopKey()) : wrap(-1, cards.length);
     clearTimeout(showTimer);
     // A quick tap flips to the previous workspace without drawing anything.
     showTimer = setTimeout(show, nextMode === "hold" ? SHOW_DELAY_MS : 0);
@@ -718,13 +780,13 @@ export function installSwitcher(paseo: Paseo): Switcher {
     refreshCards();
     const kept = cards.findIndex((c) => c.key === selected);
     // A list that was empty while loading starts like a fresh open: on the previous workspace.
-    index = kept >= 0 ? kept : before === 0 && !query ? initialIndex(cards, currentKey()) : Math.max(0, Math.min(index, cards.length - 1));
+    index = kept >= 0 ? kept : before === 0 && !query ? initialIndex(cards, currentStopKey()) : Math.max(0, Math.min(index, cards.length - 1));
     render();
   }
 
   function refreshCards() {
     if (!query) {
-      cards = buildCards(mru, serverId(), workspaces, limit);
+      cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null);
       return;
     }
     const all = filterCards(query, mru, serverId(), workspaces, Infinity);
@@ -738,7 +800,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     query = next;
     mode = "sticky";
     refreshCards();
-    index = query ? 0 : initialIndex(cards, currentKey());
+    index = query ? 0 : initialIndex(cards, currentStopKey());
     clearTimeout(showTimer);
     if (root) render();
     else show();
@@ -765,10 +827,10 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function commit(at = index) {
     // With a filter, only a match can be the target; nothing matched means nothing to switch to.
     if (query && !cards[at]) return;
-    const target = cards[at]?.key ?? previousKey(mru, currentKey());
+    const target = cards[at]?.key ?? previousKey(mru, currentStopKey());
     const drawn = Boolean(root);
     close();
-    if (!target || target === currentKey()) return;
+    if (!target || target === currentStopKey()) return;
     if (!drawn) {
       navigate(target);
       return;
@@ -779,6 +841,12 @@ export function installSwitcher(paseo: Paseo): Switcher {
   }
 
   function navigate(key: string) {
+    const screen = parsePluginScreenKey(key);
+    if (screen) {
+      // Reopen the screen with the params it had when last seen; Paseo's router reads the URL.
+      goTo(pluginScreenUrl({ ...screen, search: screens[key]?.search ?? "" }));
+      return;
+    }
     const row = doc.querySelector(rowSelector(key));
     if (row) {
       row.click();
@@ -790,6 +858,10 @@ export function installSwitcher(paseo: Paseo): Switcher {
     // Paseo's own choice (an agent needing attention, else the workspace's saved layout).
     const { serverId: server, workspaceId } = splitKey(key);
     const path = workspaceRoute(server, workspaceId, agentFor(key));
+    goTo(path);
+  }
+
+  function goTo(path: string) {
     win.history.pushState(win.history.state, "", path);
     win.dispatchEvent(new g.PopStateEvent("popstate", { state: win.history.state }));
   }
@@ -837,7 +909,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     const at = Date.now();
     if (cards.length) cards.forEach((card, i) => panel.appendChild(list ? renderRow(card, i, at) : renderCard(card, i)));
     else panel.appendChild(emptyState());
-    if (!query && cards.length === 1 && cards[0].key === currentKey()) {
+    if (!query && cards.length === 1 && cards[0].key === currentStopKey()) {
       const note = touchScreen() ? "Open another workspace to switch between them here." : `Open another workspace, then ${SHORTCUTS[shortcut].label} flips between the two.`;
       panel.appendChild(el("div", "pws-note", note));
     }
@@ -963,14 +1035,14 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   function renderCard(card: Card, i: number): Node {
     const info = card.info;
-    const name = info?.name ?? rowLabel(card.key) ?? "Workspace";
+    const name = card.screen?.title ?? info?.name ?? rowLabel(card.key) ?? "Workspace";
     const node = option(card, i, "pws-card", name);
 
     const frame = el("div", "pws-thumb");
     const canvas = thumbs.get(card.key);
     // A thumbnail from the other theme would flash; the placeholder reads better until it refreshes.
     if (canvas && canvas.dataset.dark === String(dark)) frame.appendChild(canvas);
-    else frame.appendChild(placeholder(info?.project ?? null, card.key));
+    else frame.appendChild(placeholder(info?.project ?? null, card.key, Boolean(card.screen)));
     if (i < 9) frame.appendChild(el("kbd", "pws-number", String(i + 1)));
     node.appendChild(frame);
 
@@ -980,7 +1052,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     node.appendChild(title);
 
     const meta = el("div", "pws-meta");
-    meta.appendChild(el("span", "pws-where", [info?.project, info?.branch].filter(Boolean).join(" · ")));
+    meta.appendChild(el("span", "pws-where", card.screen ? `Plugin · ${prettifyPluginId(card.screen.pluginId)}` : [info?.project, info?.branch].filter(Boolean).join(" · ")));
     if (info && (info.additions || info.deletions)) meta.appendChild(diffNode(info));
     node.appendChild(meta);
     return node;
@@ -996,12 +1068,14 @@ export function installSwitcher(paseo: Paseo): Switcher {
   /** A list row: the full name, where it lives, its pull request, and what its agent is doing. */
   function renderRow(card: Card, i: number, at: number): Node {
     const info = card.info;
-    const name = info?.name ?? rowLabel(card.key) ?? "Workspace";
+    const name = card.screen?.title ?? info?.name ?? rowLabel(card.key) ?? "Workspace";
     const node = option(card, i, "pws-card pws-row", name);
 
     node.appendChild(el("kbd", "pws-number", i < 9 ? String(i + 1) : ""));
     const project = info?.project ?? null;
-    node.appendChild(el("div", "pws-badge", (project ?? "?").slice(0, 1).toUpperCase()));
+    const badge = el("div", "pws-badge", card.screen ? undefined : (project ?? "?").slice(0, 1).toUpperCase());
+    if (card.screen) badge.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
+    node.appendChild(badge);
 
     const main = el("div", "pws-main");
     main.appendChild(nameNode("pws-name", name));
@@ -1012,6 +1086,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
       meta.appendChild(span);
       return span;
     };
+    if (card.screen) part("pws-part", `Plugin · ${prettifyPluginId(card.screen.pluginId)}`);
     if (project) part("pws-part", project);
     if (info?.background) part("pws-part pws-hidden", "hidden", "Hidden from the sidebar");
     // The name is often the branch; only show the branch when it adds something.
@@ -1056,17 +1131,19 @@ export function installSwitcher(paseo: Paseo): Switcher {
       const since = ago(info.statusAt || info.activityAt, at);
       if (since) side.appendChild(el("div", "pws-time", since === "now" ? "just now" : `for ${since}`));
     } else {
-      const since = ago(info?.activityAt, at);
+      const since = ago(card.screen ? visits[card.key] : info?.activityAt, at);
       if (since) side.appendChild(el("div", "pws-time", since === "now" ? "just now" : `${since} ago`));
     }
     node.appendChild(side);
     return node;
   }
 
-  function placeholder(project: string | null, key: string): Node {
+  function placeholder(project: string | null, key: string, plugin = false): Node {
     const box = el("div", "pws-placeholder");
-    box.appendChild(el("div", "pws-initial", (project ?? "?").slice(0, 1).toUpperCase()));
-    box.appendChild(el("div", "pws-placeholder-text", "No preview yet"));
+    const initial = el("div", "pws-initial", plugin ? undefined : (project ?? "?").slice(0, 1).toUpperCase());
+    if (plugin) initial.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
+    box.appendChild(initial);
+    box.appendChild(el("div", "pws-placeholder-text", plugin ? "Plugin screen" : "No preview yet"));
     return box;
   }
 
@@ -1226,6 +1303,19 @@ export function installSwitcher(paseo: Paseo): Switcher {
         workspaces = next;
       }
     },
+    getIncludeScreens: () => includeScreens,
+    setIncludeScreens(next) {
+      const value = parseIncludeScreens(next);
+      if (value === includeScreens) return;
+      includeScreens = value;
+      writeJson(INCLUDE_SCREENS_KEY, value);
+      mru = visibleKeys(recentKeys(visits), includeScreens);
+      // Turning it on starts recording from the screen on show; turning it off keeps what was recorded.
+      if (currentScreen()) {
+        lastKey = null;
+        syncRoute();
+      }
+    },
     getCountMessages: () => countMessages,
     setCountMessages(next) {
       const value = parseCountMessages(next);
@@ -1348,6 +1438,8 @@ const ICONS = {
   circleX: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
   circle: '<circle cx="12" cy="12" r="10"/>',
   arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  puzzle:
+    '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
 };
 
 const CSS = `
@@ -1523,6 +1615,8 @@ const CSS = `
 .pws-part { white-space: nowrap; }
 .pws-branch { white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
 .pws-icon { width: 13px; height: 13px; flex: 0 0 auto; }
+.pws-icon.pws-badge-icon { width: 14px; height: 14px; }
+.pws-initial .pws-badge-icon { width: 20px; height: 20px; }
 .pws-pr, .pws-checks, .pws-ahead { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
 .pws-pr { color: var(--pws-fg); }
 .pws-pr-open .pws-icon { color: var(--pws-ok); }

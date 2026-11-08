@@ -97,6 +97,17 @@ export interface Card {
   serverId: string;
   workspaceId: string;
   info: WorkspaceInfo | null;
+  /** Set for a plugin screen stop; `workspaceId` is then empty and `info` null. */
+  screen?: ScreenStop;
+}
+
+/** A plugin screen as shown on a card. */
+export interface ScreenStop {
+  pluginId: string;
+  screenId: string;
+  title: string;
+  /** The query string last seen on the screen (`?param.…`), or "". */
+  search: string;
 }
 
 export const MIN_LIMIT = 2;
@@ -119,6 +130,138 @@ export function workspaceKey(serverId: string, workspaceId: string): string {
 export function splitKey(key: string): { serverId: string; workspaceId: string } {
   const at = key.lastIndexOf(":");
   return { serverId: key.slice(0, at), workspaceId: key.slice(at + 1) };
+}
+
+// ---- plugin screens ---------------------------------------------------------------------------------
+
+/*
+ * Plugin screens are stops in the switcher like workspaces. They are reopened by URL because the plugin
+ * API only lets a plugin open its own screens. Paseo's route is `/h/<host>/plugin/<pluginId>/surface/<screenId>`
+ * with optional `?param.<key>=<value>`; it is not a public format, so re-check it on every Paseo upgrade.
+ */
+const SCREEN_ROUTE = /^\/h\/([^/]+)\/plugin\/([^/]+)\/surface\/([^/]+)\/?$/;
+const SCREEN_KEY_PREFIX = "plugin-screen|";
+
+export interface PluginScreenRoute {
+  serverId: string;
+  pluginId: string;
+  screenId: string;
+  search: string;
+}
+
+/** The plugin screen a URL shows; null for any other page, including the legacy `/sidebar/` form (Paseo redirects it). */
+export function parsePluginScreenUrl(pathname: string, search = ""): PluginScreenRoute | null {
+  const match = SCREEN_ROUTE.exec(pathname);
+  if (!match) return null;
+  try {
+    return {
+      serverId: decodeURIComponent(match[1]),
+      pluginId: decodeURIComponent(match[2]),
+      screenId: decodeURIComponent(match[3]),
+      search: search === "?" ? "" : search,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Path plus params, for reopening a screen. */
+export function pluginScreenUrl(route: PluginScreenRoute): string {
+  const e = encodeURIComponent;
+  return `/h/${e(route.serverId)}/plugin/${e(route.pluginId)}/surface/${e(route.screenId)}${route.search}`;
+}
+
+/** One key per screen (params are not part of it). `|` is always encoded in the parts, and no workspace key starts with this. */
+export function pluginScreenKey(serverId: string, pluginId: string, screenId: string): string {
+  const e = encodeURIComponent;
+  return `${SCREEN_KEY_PREFIX}${e(serverId)}|${e(pluginId)}|${e(screenId)}`;
+}
+
+export function isPluginScreenKey(key: string): boolean {
+  return key.startsWith(SCREEN_KEY_PREFIX);
+}
+
+export function parsePluginScreenKey(key: string): { serverId: string; pluginId: string; screenId: string } | null {
+  if (!isPluginScreenKey(key)) return null;
+  const parts = key.slice(SCREEN_KEY_PREFIX.length).split("|");
+  if (parts.length !== 3) return null;
+  try {
+    return { serverId: decodeURIComponent(parts[0]), pluginId: decodeURIComponent(parts[1]), screenId: decodeURIComponent(parts[2]) };
+  } catch {
+    return null;
+  }
+}
+
+/** The host a workspace or plugin screen key belongs to. */
+export function keyServerId(key: string): string {
+  return parsePluginScreenKey(key)?.serverId ?? splitKey(key).serverId;
+}
+
+/** "paseo-bots" -> "Paseo Bots"; a scope like "@acme/" reads as a word too. */
+export function prettifyPluginId(pluginId: string): string {
+  const words = pluginId.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  return words.length ? words.map((w) => w[0].toUpperCase() + w.slice(1)).join(" ") : "Plugin";
+}
+
+/** The title shown on the screen when visited, else a prettified plugin id. */
+export function screenTitle(shown: string | null | undefined, pluginId: string): string {
+  return shown?.trim() || prettifyPluginId(pluginId);
+}
+
+export interface ScreenMeta {
+  title: string;
+  search: string;
+}
+/** Latest title and params per screen key. */
+export type Screens = Record<string, ScreenMeta>;
+
+export function parseScreens(value: unknown): Screens {
+  const screens: Screens = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return screens;
+  for (const [k, v] of Object.entries(value)) {
+    const m = v as Partial<ScreenMeta> | null;
+    if (isPluginScreenKey(k) && m && typeof m.title === "string" && typeof m.search === "string") screens[k] = { title: m.title, search: m.search };
+  }
+  return screens;
+}
+
+/** Stores the latest title and params for a screen; returns `screens` itself when nothing changed. */
+export function recordScreen(screens: Screens, key: string, meta: ScreenMeta): Screens {
+  const current = screens[key];
+  if (current && current.title === meta.title && current.search === meta.search) return screens;
+  return { ...screens, [key]: { title: meta.title, search: meta.search } };
+}
+
+/** Drops details of screens no longer in the visit history. Returns `screens` itself when none were. */
+export function pruneScreens(screens: Screens, visits: Visits): Screens {
+  const stale = Object.keys(screens).filter((k) => !Object.hasOwn(visits, k));
+  if (!stale.length) return screens;
+  const kept: Screens = {};
+  for (const [k, v] of Object.entries(screens)) if (Object.hasOwn(visits, k)) kept[k] = v;
+  return kept;
+}
+
+function screenCard(key: string, meta: ScreenMeta | undefined): Card | null {
+  const parts = parsePluginScreenKey(key);
+  if (!parts || !meta) return null;
+  return {
+    key,
+    serverId: parts.serverId,
+    workspaceId: "",
+    info: null,
+    screen: { pluginId: parts.pluginId, screenId: parts.screenId, title: meta.title, search: meta.search },
+  };
+}
+
+/** The visit order to use: plugin screens only when they are included. */
+export function visibleKeys(mru: readonly string[], includeScreens: boolean): string[] {
+  return includeScreens ? [...mru] : mru.filter((key) => !isPluginScreenKey(key));
+}
+
+export const DEFAULT_INCLUDE_SCREENS = true;
+
+export function parseIncludeScreens(value: unknown): boolean {
+  return typeof value === "boolean" ? value : DEFAULT_INCLUDE_SCREENS;
 }
 
 // ---- visit times ----------------------------------------------------------------------------------
@@ -227,11 +370,17 @@ export function buildCards(
   serverId: string | null,
   workspaces: ReadonlyMap<string, WorkspaceInfo> | null,
   limit: number,
+  screens?: Screens | null,
 ): Card[] {
   const cards: Card[] = [];
   const seen = new Set<string>();
   for (const key of mru) {
     if (cards.length >= limit) return cards;
+    if (isPluginScreenKey(key)) {
+      const card = screens ? screenCard(key, screens[key]) : null;
+      if (card) cards.push(card);
+      continue;
+    }
     const parts = splitKey(key);
     const sameHost = parts.serverId === serverId;
     const info = sameHost ? workspaces?.get(parts.workspaceId) ?? null : null;
