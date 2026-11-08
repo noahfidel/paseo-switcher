@@ -91,12 +91,13 @@ export function ago(at: number | undefined, now: number): string | null {
   return `${Math.floor(hours / 24)}d`;
 }
 
-export type RowState = "running" | "needs-you" | "idle";
+/** Paseo's own workspace status, one to one. */
+export type RowState = WorkspaceInfo["status"];
 
 /** What a list row shows, picked from a workspace (or plugin screen) so the DOM adapter stays dumb. */
 export interface RowFacts {
   state: RowState;
-  /** "Running · 4m", "Needs you · 11m", "1h ago", or null when nothing is known. */
+  /** "Running · 4m", "Needs input · 4m", "Failed · 4m", "Finished · 4m", "1h ago", or null when nothing is known. */
   label: string | null;
   /** Project name, or the prettified plugin name for a screen. */
   project: string | null;
@@ -110,6 +111,8 @@ export interface RowFacts {
   ahead: number;
 }
 
+const STATUS_WORD = { running: "Running", needs_input: "Needs input", failed: "Failed", attention: "Finished" } as const;
+
 export function rowFacts(
   info: WorkspaceInfo | null,
   now: number,
@@ -121,7 +124,7 @@ export function rowFacts(
   };
   if (!info) {
     return {
-      state: "idle",
+      state: "done",
       label: idleLabel(screen?.visitedAt),
       project: screen ? prettifyPluginId(screen.screen.pluginId) : null,
       branch: null,
@@ -132,14 +135,13 @@ export function rowFacts(
       ahead: 0,
     };
   }
-  let state: RowState = "idle";
+  const state = info.status;
   let label: string | null;
-  if (info.status === "done") {
+  if (state === "done") {
     label = idleLabel(info.activityAt);
   } else {
-    state = info.status === "running" ? "running" : "needs-you";
     const since = ago(info.statusAt || info.activityAt, now);
-    const word = state === "running" ? "Running" : "Needs you";
+    const word = STATUS_WORD[state];
     label = since ? `${word} · ${since}` : word;
   }
   const pr = info.pr ?? null;

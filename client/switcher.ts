@@ -1073,7 +1073,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
     const lead = el("div", "pws-lead");
     if (card.screen) lead.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
-    else if (info) lead.appendChild(el("span", `pws-state pws-state-${facts.state}`));
+    else if (info && facts.state !== "done") lead.appendChild(statusMark(facts.state));
     node.appendChild(lead);
 
     const title = el("div", "pws-l1");
@@ -1588,10 +1588,9 @@ const CSS = `
 .pws-l1 { grid-column: 2; grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
 .pws-status { grid-column: 3; grid-row: 1; justify-self: end; text-align: right; font-size: 12px; line-height: 20px; font-weight: 550; color: var(--pws-muted); font-variant-numeric: tabular-nums; }
 .pws-status-running { color: var(--pws-run); }
-.pws-status-needs-you { color: var(--pws-wait); }
-.pws-state { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--pws-muted); }
-.pws-state-running { background: var(--pws-run); animation: pws-pulse 1.8s ease-out infinite; }
-.pws-state-needs-you { background: var(--pws-wait-dot); }
+.pws-status-needs_input { color: var(--pws-wait); }
+.pws-status-failed { color: var(--pws-bad); }
+.pws-status-attention { color: var(--pws-ok); }
 .pws-list .pws-name { display: block; font-size: 14px; line-height: 20px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .pws-tag {
   flex: 0 0 auto; padding: 0 5px; border: 1px solid var(--pws-border); border-radius: 5px;
@@ -1632,14 +1631,12 @@ const CSS = `
 }
 @keyframes pws-fade { from { opacity: 0; } }
 @keyframes pws-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
-@keyframes pws-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pws-run) 50%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
 @keyframes pws-turn { to { transform: rotate(360deg); } }
 @keyframes pws-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .pws-root, .pws-sheet, .pws-hint, .pws-caret { animation: none; }
   .pws-card { transition: none; }
   /* A still ring reads as "in progress" without turning. */
-  .pws-state-running { animation: none; }
   .pws-spin { animation: none; border-style: dotted; border-top-color: currentColor; }
 }
 `;

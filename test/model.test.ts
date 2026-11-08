@@ -709,11 +709,16 @@ test("rowFacts: running shows the state and how long", () => {
   assert.equal(f.label, "Running · 4m");
 });
 
-test("rowFacts: needs input, failed and finished all read as needing you", () => {
+test("rowFacts: each Paseo status keeps its own state and word", () => {
+  const expected = {
+    needs_input: "Needs input · 11m",
+    failed: "Failed · 11m",
+    attention: "Finished · 11m",
+  } as const;
   for (const status of ["needs_input", "failed", "attention"] as const) {
     const f = rowFacts(facts({ status, statusAt: FACTS_NOW - 11 * 60_000 }), FACTS_NOW);
-    assert.equal(f.state, "needs-you", status);
-    assert.equal(f.label, "Needs you · 11m", status);
+    assert.equal(f.state, status);
+    assert.equal(f.label, expected[status], status);
   }
 });
 
@@ -723,7 +728,7 @@ test("rowFacts: a status that just began says now", () => {
 
 test("rowFacts: idle shows how long ago, falling back to activity time", () => {
   const f = rowFacts(facts(), FACTS_NOW);
-  assert.equal(f.state, "idle");
+  assert.equal(f.state, "done");
   assert.equal(f.label, "1h ago");
   assert.equal(rowFacts(facts({ activityAt: FACTS_NOW - 10_000 }), FACTS_NOW).label, "just now");
   assert.equal(rowFacts(facts({ activityAt: 0 }), FACTS_NOW).label, null);
@@ -768,7 +773,7 @@ test("rowFacts: checks only count while the pull request is open or draft", () =
 test("rowFacts: a plugin screen shows only its plugin name and when it was visited", () => {
   const screen = { pluginId: "flowly", screenId: "home", title: "Home", search: "" };
   const f = rowFacts(null, FACTS_NOW, { screen, visitedAt: FACTS_NOW - 2 * 3_600_000 });
-  assert.equal(f.state, "idle");
+  assert.equal(f.state, "done");
   assert.equal(f.project, "Flowly");
   assert.equal(f.branch, null);
   assert.equal(f.label, "2h ago");
