@@ -1099,9 +1099,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
     const node = option(card, i, "pws-card pws-row", name);
     const facts = rowFacts(info, at, card.screen ? { screen: card.screen, visitedAt: visits[card.key] } : undefined);
 
+    // The lead says what the row is; the agent's state sits with its label on the right.
     const lead = el("div", "pws-lead");
-    if (card.screen) lead.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
-    else if (info && facts.state !== "done") lead.appendChild(statusMark(facts.state));
+    lead.appendChild(icon(card.screen ? "puzzle" : info?.branch ? "gitBranch" : "folder", "pws-icon pws-badge-icon"));
     node.appendChild(lead);
 
     const title = el("div", "pws-l1");
@@ -1113,7 +1113,12 @@ export function installSwitcher(paseo: Paseo): Switcher {
     }
     node.appendChild(title);
 
-    if (facts.label) node.appendChild(el("div", `pws-status pws-status-${facts.state}`, facts.label));
+    if (facts.label) {
+      const status = el("div", `pws-status pws-status-${facts.state}`);
+      if (info && facts.state !== "done") status.appendChild(statusMark(facts.state));
+      status.appendChild(el("span", "", facts.label));
+      node.appendChild(status);
+    }
 
     const where = el("div", "pws-where");
     if (facts.project) where.appendChild(el("span", "", facts.project));
@@ -1459,6 +1464,8 @@ const ICONS = {
   circleX: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
   circle: '<circle cx="12" cy="12" r="10"/>',
   arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  gitBranch: '<path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   puzzle:
     '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
 };
@@ -1629,7 +1636,7 @@ const CSS = `
 }
 .pws-lead { grid-row: 1 / span 2; grid-column: 1; align-self: start; height: 20px; display: flex; align-items: center; justify-content: center; }
 .pws-l1 { grid-column: 2; grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
-.pws-status { grid-column: 3; grid-row: 1; justify-self: end; text-align: right; font-size: 12px; line-height: 20px; font-weight: 550; color: var(--pws-muted); font-variant-numeric: tabular-nums; }
+.pws-status { grid-column: 3; grid-row: 1; justify-self: end; display: inline-flex; align-items: center; gap: 6px; text-align: right; font-size: 12px; line-height: 20px; font-weight: 550; color: var(--pws-muted); font-variant-numeric: tabular-nums; }
 .pws-status-running { color: var(--pws-run); }
 .pws-status-needs_input { color: var(--pws-wait); }
 .pws-status-failed { color: var(--pws-bad); }

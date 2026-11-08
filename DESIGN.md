@@ -285,8 +285,8 @@ The one floating panel: `panel` over a 28px blur, a 1px `border` edge, the sheet
 
 ### List row (signature)
 
-- **Lead slot (20px):** for a workspace, the same mark as the Thumbnails layout and Paseo's sidebar: a `running-blue` turning ring while the agent runs, an amber dot for needs input, red for failed, green for finished, and nothing for `done`. A plugin screen shows the muted puzzle icon instead.
-- **Line 1:** the full name (marked letters when filtering), bold, wrapping; a workspace hidden from the sidebar gets a small bordered "hidden" tag after it. On the right, one string: "Running · 4m" in `running-blue`, "Needs input · 4m" in `waiting-amber`, "Failed · 4m" in red, "Finished · 4m" in green, otherwise "1h ago" or "just now" in muted.
+- **Lead slot (20px):** what the row is, as one muted 14px Lucide icon on every row so the rows line up: `git-branch` for a workspace on a branch, `folder` for one without, `puzzle` for a plugin screen.
+- **Line 1:** the full name (marked letters when filtering), bold, wrapping; a workspace hidden from the sidebar gets a small bordered "hidden" tag after it. On the right, the agent's state: the same status mark as the Thumbnails layout and Paseo's sidebar, 6px before one string in the label's colour: a turning ring and "Running · 4m" in `running-blue`, an amber dot and "Needs input · 4m" in `waiting-amber`, a red dot and "Failed · 4m", a green dot and "Finished · 4m". `done` has no mark, only "1h ago" or "just now" in muted.
 - **Line 2, left:** muted "project · branch", the branch in mono and left out when it equals the name. A plugin screen shows only its plugin name ("Flowly").
 - **Line 2, right:** tabular facts in a fixed order, each omitted when it does not apply: PR (icon + `#N`), checks as one icon (check in `finished-green`, clock in `waiting-amber`, x in `failed-red`; only while the PR is open or draft), the diff as one green `+N` and red `−N` pair, and unpushed commits (up arrow + count). Plugin screens show none.
 - **States:** hover moves the selection (no separate hover style), a click commits. The selected row takes a `running-blue` tint, 12% fill and 38% border, over 90ms.
