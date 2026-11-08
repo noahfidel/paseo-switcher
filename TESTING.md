@@ -57,7 +57,7 @@ The run takes about four minutes. It prints a PASS/FAIL line per check, writes `
 | B11 | Repeated taps toggle between the last two workspaces |
 | B12 | A fast double tap goes two back, still without drawing |
 | B13 | Esc cancels, and releasing Ctrl afterwards does nothing |
-| B14 | Number keys 1–9 jump straight to a card |
+| B14 | A number key does not jump to a card; it only filters |
 | B15 | Ctrl+Shift+Tab starts at the oldest card |
 | B16 | Losing window focus cancels |
 | B17–B21 | Command Center entry: Enter or a click switches; hover selects; clicking the backdrop closes |

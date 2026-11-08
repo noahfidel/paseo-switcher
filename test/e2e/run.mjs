@@ -190,11 +190,14 @@ async function behavior(page, visited) {
 
   m = await mru(page);
   await holdOpen(page);
+  const beforeDigit = await cur(page);
   await page.keyboard.press("4");
-  const closedByDigit = !(await strip(page)).open;
+  const stillOpen = (await strip(page)).open;
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
   await page.keyboard.up("Control");
-  await page.waitForTimeout(1500);
-  check("B14", "A number key jumps straight to that card", closedByDigit && (await cur(page)) === m[3], { now: await cur(page), want: m[3] });
+  await page.waitForTimeout(800);
+  check("B14", "A number key no longer jumps to a card: it only filters", stillOpen && (await cur(page)) === beforeDigit, { now: await cur(page), before: beforeDigit });
 
   await page.keyboard.down("Control");
   await page.keyboard.down("Shift");

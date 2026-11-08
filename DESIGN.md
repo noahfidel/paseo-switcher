@@ -81,18 +81,14 @@ typography:
     fontWeight: 600
     lineHeight: "16px"
     fontFeature: "tnum"
-  tile-letter:
-    fontSize: "12px"
-    fontWeight: 650
-  placeholder-letter:
-    fontSize: "17px"
-    fontWeight: 650
+  placeholder-project:
+    fontSize: "13px"
+    fontWeight: 550
 rounded:
   mark: "3px"
   key: "5px"
   tile: "7px"
   thumb: "9px"
-  placeholder-tile: "10px"
   row: "12px"
   card: "15px"
   sheet-list: "18px"
@@ -140,18 +136,6 @@ components:
     rounded: "{rounded.card}"
   thumbnail:
     rounded: "{rounded.thumb}"
-  project-tile:
-    backgroundColor: "{colors.tile}"
-    textColor: "{colors.muted}"
-    rounded: "{rounded.tile}"
-    size: "22px"
-    typography: "{typography.tile-letter}"
-  placeholder-tile:
-    backgroundColor: "{colors.tile}"
-    textColor: "{colors.muted}"
-    rounded: "{rounded.placeholder-tile}"
-    size: "36px"
-    typography: "{typography.placeholder-letter}"
   keycap:
     backgroundColor: "{colors.key}"
     textColor: "{colors.muted}"
@@ -196,7 +180,7 @@ The switcher is a macOS-grade switcher sheet drawn over Paseo. The app dims, and
 
 It is an overlay, not a Paseo screen. It draws itself with plain DOM outside React, so it owns a small palette of zinc neutrals in two themes. The theme comes from the luminance of the workspace surface the sheet opens over, not from host tokens. Its only colours are Paseo's status hues, so a status reads exactly as it does in the sidebar. Selection never uses a hue. The settings screen is the exception: it is entirely the host's own `SettingsSection`, `SettingsCard` and `SettingsSelect`, with no styling of its own.
 
-The density is that of a launcher. Names are 14px, everything else is 11–12px, and the query is the largest text on screen at 15px. Each row answers "which one is it" (number, project, name, branch, pull request, checks, diff, unpushed commits) and "what is its agent doing" (the status column) in two lines.
+The density is that of a launcher. Names are 14px, everything else is 11–12px, and the query is the largest text on screen at 15px. Each row answers "which one is it" (project, name, branch, pull request, checks, diff, unpushed commits) and "what is its agent doing" (the state label and dot) in two lines.
 
 **Key Characteristics:**
 
@@ -226,9 +210,9 @@ Zinc neutrals in two themes, with Paseo's status hues as the only colour. Each h
 - **Panel** (`panel` / `panel-dark`): the sheet, at 95–96% opacity over a 28px blur saturated 1.4×.
 - **Solid** (`solid` / `solid-dark`): opaque surfaces that sit on the sheet or the scrim: the query header and the hint pill.
 - **Ink** (`ink` / `ink-dark`): names, query text, PR numbers, the status label for running, and keycaps in the hint.
-- **Muted** (`muted` / `muted-dark`): the meta line, times, counts, keycaps on rows, the search icon, tile letters and the "Type to filter" hint.
+- **Muted** (`muted` / `muted-dark`): the meta line, times, counts, the search icon, placeholder project names and the "Type to filter" hint.
 - **Border** (`border` / `border-dark`): the sheet edge, the query header's bottom rule, the hint pill edge, and the keycap edge and bottom lip.
-- **Tile** (`tile` / `tile-dark`): the project tile and the placeholder letter tile.
+- **Tile** (`tile` / `tile-dark`): the plugin screen's placeholder tile.
 - **Selected and Ring** (`selected`, `ring` and their dark values): the selected row or card fill and its 1px inset ring. The ring colour is also the strip's scrollbar thumb.
 - **Mark** (`mark` / `mark-dark`): the highlight behind the matched letters of a filtered name.
 - **Faint, Thumb border and Key**: the placeholder thumbnail ground, the thumbnail hairline, and the keycap face.
@@ -246,7 +230,7 @@ Zinc neutrals in two themes, with Paseo's status hues as the only colour. Each h
 **Body Font:** system sans (`system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`)
 **Label/Mono Font:** `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace` at 11.5px, for branch names only
 
-**Character:** One system face in a narrow range. Hierarchy comes from weight (400 / 500 / 550 / 600 / 650) and ink versus muted. Every changing number (keycap numbers, diff counts, times, match counts, PR numbers) is tabular.
+**Character:** One system face in a narrow range. Hierarchy comes from weight (400 / 500 / 550 / 600 / 650) and ink versus muted. Every changing number (diff counts, times, match counts, PR numbers) is tabular.
 
 ### Hierarchy
 
@@ -258,7 +242,7 @@ Zinc neutrals in two themes, with Paseo's status hues as the only colour. Each h
 - **Hint** (400, 12px, 18px): keycap labels in ink at 85% opacity.
 - **Empty text** (400, 12.5px, muted): the line under an empty title.
 - **Branch** (mono 11.5px): the branch, shown only when it differs from the name.
-- **Keycap** (600, 11px, 16px, tabular): keys and row numbers.
+- **Keycap** (600, 11px, 16px, tabular): keys.
 
 ### Named Rules
 
@@ -269,10 +253,10 @@ Zinc neutrals in two themes, with Paseo's status hues as the only colour. Each h
 ## Layout
 
 - **Placement:** the overlay fills the window and pins its content to the top, at `max(48px, 16vh)`, centred. So the sheet grows downward and never jumps while you type. The sheet and the hint stack with a 10px gap.
-- **List (default):** the sheet is `min(680px, 100vw − 32px)` wide. Rows stack 2px apart inside a 6px inset. Each row is a grid of number keycap | 22px project tile | name and meta | status column, with 12px column gaps and 10 × 12px padding. The list scrolls inside a height of `100vh − top − 150px`. It scrolls the selection into view only when it overflows, because scrolling forces a layout.
+- **List (default):** the sheet is `min(680px, 100vw − 32px)` wide. Rows stack 2px apart inside a 6px inset. Each row is a three-column grid: a 20px lead slot | content | right-aligned column, on two lines, with 12px column gaps and 10 × 12px padding. Under 480px the right column drops below the content. The list scrolls inside a height of `100vh − top − 150px`. It scrolls the selection into view only when it overflows, because scrolling forces a layout.
 - **Thumbnails:** cards from 176px to 240px wide (aspect 0.66) are sized to fit every card in the window less 48px a side. They sit 6px apart inside a 10px inset. A strip that still overflows scrolls sideways and fades 28px at each edge rather than cutting a card. Cards align to the top, so a two-line name never stretches its neighbours.
-- **Phone rule (under 600px):** the thumbnail layout falls back to the list. The project tile drops and the grid tightens to 10px gaps with 10px padding. The meta line wraps, and the hint becomes the sentence "Tap a workspace to switch". A coarse pointer gets that sentence at any width.
-- **Status column:** right-aligned and unwrapped. The status line sits on the name's 20px baseline, and the time sits under it.
+- **Phone rule (under 600px):** the thumbnail layout falls back to the list. The grid tightens to 10px gaps with 10px padding. The meta line wraps, and the hint becomes the sentence "Tap a workspace to switch". A coarse pointer gets that sentence at any width.
+- **Right column:** right-aligned and unwrapped, one value per line: the state label on the name's 20px baseline, the compact facts under it.
 
 ## Elevation & Depth
 
@@ -291,7 +275,7 @@ There are three layers: the scrim, the blurred translucent sheet, and opaque sol
 
 ## Shapes
 
-Nested rounded rectangles. Each radius is smaller than the one around it: sheet 22px (strip) or 18px (list), card 15px, row 12px, placeholder tile 10px, thumbnail 9px, project tile 7px, keycap 5px, match 3px. The hint is a pill. Status dots and the running ring are circles (8px and 9px). The ring has a 1.75px stroke with its top quarter open.
+Nested rounded rectangles. Each radius is smaller than the one around it: sheet 22px (strip) or 18px (list), card 15px, row 12px, thumbnail 9px, keycap 5px, match 3px. The hint is a pill. Status dots and the running ring are circles (8px and 9px). The ring has a 1.75px stroke with its top quarter open.
 
 ## Components
 
@@ -301,15 +285,15 @@ The one floating panel: `panel` over a 28px blur, a 1px `border` edge, the sheet
 
 ### List row (signature)
 
-- **Number keycap:** 1–9 for the first nine rows (empty beyond), 1px below the top.
-- **Project tile:** 22px `tile` square with 7px corners, holding the project's first letter in muted 650 (or "?"). It is a neutral tile, never coloured per project.
-- **Main:** the full name (marked letters when filtering) and a wrapping meta line: project, branch (mono, only when not the name), PR chip (Lucide icon + `#N` and "Draft", "Merged" or "Closed"), checks (icon + passed/failed/pending), "Approved" or "Changes requested", `+N −N`, and the unpushed count with an up arrow and a "N commits not pushed" tooltip. Checks and review show only while the PR is open or draft.
-- **Status column:** the status mark and label, then "for 8m"; with no live status, just "2h ago" or "just now".
-- **States:** hover moves the selection (no separate hover style), a click commits, and selection changes the background and ring over 90ms.
+- **Lead slot (20px):** for a workspace, an 8px state dot: `running-blue` with a soft pulse (still under reduced motion) while the agent runs, `waiting-amber-dot` when it needs you (waiting, failed or finished), muted when idle. A plugin screen shows the muted puzzle icon instead.
+- **Line 1:** the full name (marked letters when filtering), bold, wrapping; a workspace hidden from the sidebar gets a small bordered "hidden" tag after it. On the right, one string: "Running · 4m" in `running-blue`, "Needs you · 11m" in `waiting-amber`, otherwise "1h ago" or "just now" in muted.
+- **Line 2, left:** muted "project · branch", the branch in mono and left out when it equals the name. A plugin screen shows only its plugin name ("Flowly").
+- **Line 2, right:** tabular facts in a fixed order, each omitted when it does not apply: PR (icon + `#N`), checks as one icon (check in `finished-green`, clock in `waiting-amber`, x in `failed-red`; only while the PR is open or draft), the diff as one green `+N` and red `−N` pair, and unpushed commits (up arrow + count). Plugin screens show none.
+- **States:** hover moves the selection (no separate hover style), a click commits. The selected row takes a `running-blue` tint, 12% fill and 38% border, over 90ms.
 
 ### Thumbnail card
 
-A 15px-cornered card with a thumbnail framed by a 1px hairline at 9px corners. The thumbnail ground is the workspace's own surface colour. The number keycap sits 6px in from the top-right corner. Below come the title (status mark + name, two lines at most) and a meta line (project · branch, then the diff). Before a raster exists, or when it was taken in the other theme, a placeholder shows a 36px letter tile and "No preview yet".
+A 15px-cornered card with a thumbnail framed by a 1px hairline at 9px corners. The thumbnail ground is the workspace's own surface colour. Below come the title (status mark + name, two lines at most) and a meta line (project · branch, then the diff). Before a raster exists, or when it was taken in the other theme, a placeholder shows the project name in muted text (a puzzle icon for a plugin screen) and "No preview yet".
 
 ### Status marks
 
@@ -357,21 +341,21 @@ The host's Settings section "Switcher" with one card holding two `SettingsSelect
 ### Do:
 
 - **Do** keep recency order; status never reorders rows.
-- **Do** mark selection with the neutral fill and 1px inset ring only.
+- **Do** mark selection with the neutral fill and 1px inset ring (thumbnails), or the blue tint and border (list).
 - **Do** use Paseo's status words and hues: blue running ring, amber needs input, red failed, green finished, purple merged.
 - **Do** use Lucide stroke icons (24-unit box, 2px stroke, drawn at 13px in meta and 16px in the query) for PR state, checks, unpushed commits and search, and keycaps for keys.
 - **Do** keep the query header inside the same sheet, so typing never moves the panel.
 - **Do** show only the keys that work in the current state.
-- **Do** fall back to the list, drop the project tile and switch to "Tap a workspace to switch" below 600px or on a coarse pointer.
+- **Do** fall back to the list, switch to "Tap a workspace to switch" below 600px or on a coarse pointer.
 - **Do** keep the overlay to plain DOM under 200 elements, and leave the navigation path untouched: thumbnails rasterize only in idle time.
 - **Do** honour reduced motion in every animation, including the sheet's settle-in.
 
 ### Don't:
 
-- **Don't** colour the selection or use an accent anywhere in the overlay.
+- **Don't** use an accent anywhere in the overlay except the selected list row's tint and the running state.
 - **Don't** sort, group or badge rows by status.
 - **Don't** nest cards inside cards; rows and thumbnail cards sit directly on the sheet.
 - **Don't** use glyph or emoji icons; arrows appear only as keycap labels.
 - **Don't** truncate names or branches in the list; wrap them.
-- **Don't** give a project its own hue; the project tile is neutral.
+- **Don't** give a project its own hue.
 - **Don't** add blur or a shadow to the hint pill; it is solid.

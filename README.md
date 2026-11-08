@@ -42,13 +42,13 @@ paseo plugin install paseo-switcher
 | Cmd+Shift+` | Move back |
 | Release Cmd | Switch to the selected workspace |
 | Quick Cmd+` | Go straight back to the previous workspace |
-| Arrows, Enter, 1–9 | Move, switch, or jump to a row |
+| Arrows, Enter | Move and switch |
 | Type | Filter all workspaces; the switcher then stays open until Enter or a click |
 | Esc | Clear the filter, then cancel |
 
 The keys above are for the default shortcut, **Cmd+`**. Choose **Ctrl+Tab**, **Option+Tab** or **Ctrl+`** under Settings; the modifier you hold and release is then Ctrl or Option. Paseo uses Ctrl+` itself (Toggle Explorer sidebar), so pick Ctrl+` only if you have unbound that.
 
-While the switcher is open it takes every key, so typing never triggers a Paseo shortcut. Number keys jump to a row until you type a filter; after that they search pull request numbers too. Hovering a row selects it and clicking switches to it.
+While the switcher is open it takes every key, so typing never triggers a Paseo shortcut. Hovering a row selects it and clicking switches to it.
 
 The Command Center has **Switch workspace (…)**, titled with your chosen shortcut, for browser tabs, where the browser keeps Ctrl+Tab for itself, and for the web UI on a phone, where a tap switches:
 

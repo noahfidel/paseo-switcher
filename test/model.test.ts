@@ -7,6 +7,7 @@ import {
   type AgentMemory,
   type RememberedAgent,
   ago,
+  rowFacts,
   buildCards,
   parseAgentMemory,
   pickFocusedAgent,
@@ -692,4 +693,87 @@ test("the plugin screens setting defaults on and reads only booleans", () => {
   assert.equal(parseIncludeScreens("no"), true);
   assert.equal(parseIncludeScreens(false), false);
   assert.equal(parseIncludeScreens(true), true);
+});
+
+const FACTS_NOW = 1_700_000_000_000;
+function facts(over: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
+  return {
+    id: "w", name: "feature-x", project: "paseo", branch: "feature-x", status: "done",
+    additions: 0, deletions: 0, activityAt: FACTS_NOW - 3_600_000, ...over,
+  };
+}
+
+test("rowFacts: running shows the state and how long", () => {
+  const f = rowFacts(facts({ status: "running", statusAt: FACTS_NOW - 4 * 60_000 }), FACTS_NOW);
+  assert.equal(f.state, "running");
+  assert.equal(f.label, "Running · 4m");
+});
+
+test("rowFacts: needs input, failed and finished all read as needing you", () => {
+  for (const status of ["needs_input", "failed", "attention"] as const) {
+    const f = rowFacts(facts({ status, statusAt: FACTS_NOW - 11 * 60_000 }), FACTS_NOW);
+    assert.equal(f.state, "needs-you", status);
+    assert.equal(f.label, "Needs you · 11m", status);
+  }
+});
+
+test("rowFacts: a status that just began says now", () => {
+  assert.equal(rowFacts(facts({ status: "running", statusAt: FACTS_NOW - 5_000 }), FACTS_NOW).label, "Running · now");
+});
+
+test("rowFacts: idle shows how long ago, falling back to activity time", () => {
+  const f = rowFacts(facts(), FACTS_NOW);
+  assert.equal(f.state, "idle");
+  assert.equal(f.label, "1h ago");
+  assert.equal(rowFacts(facts({ activityAt: FACTS_NOW - 10_000 }), FACTS_NOW).label, "just now");
+  assert.equal(rowFacts(facts({ activityAt: 0 }), FACTS_NOW).label, null);
+});
+
+test("rowFacts: the branch is left out when it matches the name", () => {
+  assert.equal(rowFacts(facts(), FACTS_NOW).branch, null);
+  assert.equal(rowFacts(facts({ branch: "other" }), FACTS_NOW).branch, "other");
+  assert.equal(rowFacts(facts({ branch: null }), FACTS_NOW).branch, null);
+  assert.equal(rowFacts(facts(), FACTS_NOW).project, "paseo");
+});
+
+test("rowFacts: hidden workspaces are flagged", () => {
+  assert.equal(rowFacts(facts({ background: true }), FACTS_NOW).hidden, true);
+  assert.equal(rowFacts(facts(), FACTS_NOW).hidden, false);
+});
+
+test("rowFacts: pull request, checks, diff and unpushed commits, only when they apply", () => {
+  const none = rowFacts(facts(), FACTS_NOW);
+  assert.equal(none.pr, null);
+  assert.equal(none.checks, null);
+  assert.equal(none.diff, null);
+  assert.equal(none.ahead, 0);
+
+  const full = rowFacts(
+    facts({ pr: { number: 9161, state: "open", checks: "pending", review: null }, additions: 214, deletions: 37, ahead: 2 }),
+    FACTS_NOW,
+  );
+  assert.deepEqual(full.pr, { number: 9161, state: "open" });
+  assert.equal(full.checks, "pending");
+  assert.deepEqual(full.diff, { additions: 214, deletions: 37 });
+  assert.equal(full.ahead, 2);
+});
+
+test("rowFacts: checks only count while the pull request is open or draft", () => {
+  const merged = rowFacts(facts({ pr: { number: 1, state: "merged", checks: "success", review: null } }), FACTS_NOW);
+  assert.equal(merged.checks, null);
+  const noChecks = rowFacts(facts({ pr: { number: 1, state: "open", checks: "none", review: null } }), FACTS_NOW);
+  assert.equal(noChecks.checks, null);
+});
+
+test("rowFacts: a plugin screen shows only its plugin name and when it was visited", () => {
+  const screen = { pluginId: "flowly", screenId: "home", title: "Home", search: "" };
+  const f = rowFacts(null, FACTS_NOW, { screen, visitedAt: FACTS_NOW - 2 * 3_600_000 });
+  assert.equal(f.state, "idle");
+  assert.equal(f.project, "Flowly");
+  assert.equal(f.branch, null);
+  assert.equal(f.label, "2h ago");
+  assert.equal(f.pr, null);
+  assert.equal(f.diff, null);
+  assert.equal(f.ahead, 0);
+  assert.equal(f.hidden, false);
 });

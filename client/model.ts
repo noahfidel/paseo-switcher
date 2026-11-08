@@ -91,6 +91,72 @@ export function ago(at: number | undefined, now: number): string | null {
   return `${Math.floor(hours / 24)}d`;
 }
 
+export type RowState = "running" | "needs-you" | "idle";
+
+/** What a list row shows, picked from a workspace (or plugin screen) so the DOM adapter stays dumb. */
+export interface RowFacts {
+  state: RowState;
+  /** "Running · 4m", "Needs you · 11m", "1h ago", or null when nothing is known. */
+  label: string | null;
+  /** Project name, or the prettified plugin name for a screen. */
+  project: string | null;
+  /** Null when absent or equal to the name. */
+  branch: string | null;
+  hidden: boolean;
+  pr: { number: number | null; state: PullRequestInfo["state"] } | null;
+  /** Only while the pull request is open or draft. */
+  checks: "pending" | "success" | "failure" | null;
+  diff: { additions: number; deletions: number } | null;
+  ahead: number;
+}
+
+export function rowFacts(
+  info: WorkspaceInfo | null,
+  now: number,
+  screen?: { screen: ScreenStop; visitedAt?: number },
+): RowFacts {
+  const idleLabel = (at: number | undefined) => {
+    const since = ago(at, now);
+    return since === null ? null : since === "now" ? "just now" : `${since} ago`;
+  };
+  if (!info) {
+    return {
+      state: "idle",
+      label: idleLabel(screen?.visitedAt),
+      project: screen ? prettifyPluginId(screen.screen.pluginId) : null,
+      branch: null,
+      hidden: false,
+      pr: null,
+      checks: null,
+      diff: null,
+      ahead: 0,
+    };
+  }
+  let state: RowState = "idle";
+  let label: string | null;
+  if (info.status === "done") {
+    label = idleLabel(info.activityAt);
+  } else {
+    state = info.status === "running" ? "running" : "needs-you";
+    const since = ago(info.statusAt || info.activityAt, now);
+    const word = state === "running" ? "Running" : "Needs you";
+    label = since ? `${word} · ${since}` : word;
+  }
+  const pr = info.pr ?? null;
+  const live = pr && (pr.state === "open" || pr.state === "draft");
+  return {
+    state,
+    label,
+    project: info.project || null,
+    branch: info.branch && info.branch !== info.name ? info.branch : null,
+    hidden: Boolean(info.background),
+    pr: pr ? { number: pr.number, state: pr.state } : null,
+    checks: live && pr.checks !== "none" ? pr.checks : null,
+    diff: info.additions || info.deletions ? { additions: info.additions, deletions: info.deletions } : null,
+    ahead: info.ahead ?? 0,
+  };
+}
+
 export interface Card {
   /** `${serverId}:${workspaceId}`, the same key Paseo uses in sidebar test IDs. */
   key: string;

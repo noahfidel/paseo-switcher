@@ -3,6 +3,7 @@ import {
   agentIdFromTabTestId,
   agentToOpen,
   ago,
+  rowFacts,
   buildCards,
   parseAgentMemory,
   pickFocusedAgent,
@@ -45,7 +46,6 @@ import {
   matchesShortcut,
   matchRanges,
   MAX_LIMIT,
-  STATUS_LABEL,
   DEFAULT_LIMIT,
   initialIndex,
   parseLayout,
@@ -1043,7 +1043,6 @@ export function installSwitcher(paseo: Paseo): Switcher {
     // A thumbnail from the other theme would flash; the placeholder reads better until it refreshes.
     if (canvas && canvas.dataset.dark === String(dark)) frame.appendChild(canvas);
     else frame.appendChild(placeholder(info?.project ?? null, card.key, Boolean(card.screen)));
-    if (i < 9) frame.appendChild(el("kbd", "pws-number", String(i + 1)));
     node.appendChild(frame);
 
     const title = el("div", "pws-title");
@@ -1065,84 +1064,63 @@ export function installSwitcher(paseo: Paseo): Switcher {
     return diff;
   }
 
-  /** A list row: the full name, where it lives, its pull request, and what its agent is doing. */
+  /** A list row: state dot, name and where it lives, what its agent is doing, and compact facts. */
   function renderRow(card: Card, i: number, at: number): Node {
     const info = card.info;
     const name = card.screen?.title ?? info?.name ?? rowLabel(card.key) ?? "Workspace";
     const node = option(card, i, "pws-card pws-row", name);
+    const facts = rowFacts(info, at, card.screen ? { screen: card.screen, visitedAt: visits[card.key] } : undefined);
 
-    node.appendChild(el("kbd", "pws-number", i < 9 ? String(i + 1) : ""));
-    const project = info?.project ?? null;
-    const badge = el("div", "pws-badge", card.screen ? undefined : (project ?? "?").slice(0, 1).toUpperCase());
-    if (card.screen) badge.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
-    node.appendChild(badge);
+    const lead = el("div", "pws-lead");
+    if (card.screen) lead.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
+    else if (info) lead.appendChild(el("span", `pws-state pws-state-${facts.state}`));
+    node.appendChild(lead);
 
-    const main = el("div", "pws-main");
-    main.appendChild(nameNode("pws-name", name));
-    const meta = el("div", "pws-meta");
-    const part = (className: string, text: string, title?: string) => {
-      const span = el("span", className, text);
-      if (title) span.title = title;
-      meta.appendChild(span);
-      return span;
+    const title = el("div", "pws-l1");
+    title.appendChild(nameNode("pws-name", name));
+    if (facts.hidden) {
+      const tag = el("span", "pws-tag", "hidden");
+      tag.title = "Hidden from the sidebar";
+      title.appendChild(tag);
+    }
+    node.appendChild(title);
+
+    if (facts.label) node.appendChild(el("div", `pws-status pws-status-${facts.state}`, facts.label));
+
+    const where = el("div", "pws-where");
+    if (facts.project) where.appendChild(el("span", "", facts.project));
+    if (facts.project && facts.branch) where.appendChild(doc.createTextNode(" · "));
+    if (facts.branch) where.appendChild(el("span", "pws-branch", facts.branch));
+    node.appendChild(where);
+
+    const bits = el("div", "pws-facts");
+    const fact = (className: string, text: string, tip: string, glyph?: keyof typeof ICONS) => {
+      const span = el("span", `pws-fact ${className}`);
+      span.title = tip;
+      if (glyph) span.appendChild(icon(glyph, "pws-icon"));
+      if (text) span.appendChild(el("span", "", text));
+      bits.appendChild(span);
     };
-    if (card.screen) part("pws-part", `Plugin · ${prettifyPluginId(card.screen.pluginId)}`);
-    if (project) part("pws-part", project);
-    if (info?.background) part("pws-part pws-hidden", "hidden", "Hidden from the sidebar");
-    // The name is often the branch; only show the branch when it adds something.
-    if (info?.branch && info.branch !== name) part("pws-part pws-branch", info.branch);
-    const pr = info?.pr;
-    if (pr) {
-      const chip = el("span", `pws-part pws-pr pws-pr-${pr.state}`);
-      chip.title = "Pull request";
-      chip.appendChild(icon(PR_ICON[pr.state], "pws-icon"));
-      const state = pr.state === "open" ? "" : ` ${pr.state[0].toUpperCase()}${pr.state.slice(1)}`;
-      chip.appendChild(el("span", "", `${pr.number ? `#${pr.number}` : "PR"}${state}`));
-      meta.appendChild(chip);
-      if (pr.state === "open" || pr.state === "draft") {
-        if (pr.checks !== "none") {
-          const checks = el("span", `pws-part pws-checks pws-checks-${pr.checks}`);
-          checks.title = "Checks";
-          checks.appendChild(icon(CHECK_ICON[pr.checks], "pws-icon"));
-          checks.appendChild(el("span", "", CHECK_LABEL[pr.checks]));
-          meta.appendChild(checks);
-        }
-        if (pr.review === "approved") part("pws-part pws-approved", "Approved");
-        else if (pr.review === "changes_requested") part("pws-part pws-changes", "Changes requested");
-      }
+    if (facts.pr) fact(`pws-pr pws-pr-${facts.pr.state}`, facts.pr.number ? `#${facts.pr.number}` : "PR", `Pull request (${facts.pr.state})`, PR_ICON[facts.pr.state]);
+    if (facts.checks) fact(`pws-checks-${facts.checks}`, "", `Checks ${CHECK_LABEL[facts.checks]}`, CHECK_ICON[facts.checks]);
+    if (facts.diff) {
+      const diff = el("span", "pws-fact pws-diff");
+      diff.appendChild(el("span", "pws-add", `+${facts.diff.additions}`));
+      diff.appendChild(el("span", "pws-del", `−${facts.diff.deletions}`));
+      bits.appendChild(diff);
     }
-    if (info && (info.additions || info.deletions)) meta.appendChild(diffNode(info));
-    if (info?.ahead) {
-      const ahead = el("span", "pws-part pws-ahead");
-      ahead.title = `${info.ahead} ${info.ahead === 1 ? "commit" : "commits"} not pushed`;
-      ahead.appendChild(icon("arrowUp", "pws-icon"));
-      ahead.appendChild(el("span", "", String(info.ahead)));
-      meta.appendChild(ahead);
-    }
-    if (meta.childNodes.length) main.appendChild(meta);
-    node.appendChild(main);
-
-    const side = el("div", "pws-side");
-    if (info && info.status !== "done") {
-      const status = el("div", `pws-status pws-status-${info.status}`);
-      status.appendChild(statusMark(info.status));
-      status.appendChild(el("span", "", STATUS_LABEL[info.status]));
-      side.appendChild(status);
-      const since = ago(info.statusAt || info.activityAt, at);
-      if (since) side.appendChild(el("div", "pws-time", since === "now" ? "just now" : `for ${since}`));
-    } else {
-      const since = ago(card.screen ? visits[card.key] : info?.activityAt, at);
-      if (since) side.appendChild(el("div", "pws-time", since === "now" ? "just now" : `${since} ago`));
-    }
-    node.appendChild(side);
+    if (facts.ahead) fact("pws-ahead", String(facts.ahead), `${facts.ahead} ${facts.ahead === 1 ? "commit" : "commits"} not pushed`, "arrowUp");
+    node.appendChild(bits);
     return node;
   }
 
   function placeholder(project: string | null, key: string, plugin = false): Node {
     const box = el("div", "pws-placeholder");
-    const initial = el("div", "pws-initial", plugin ? undefined : (project ?? "?").slice(0, 1).toUpperCase());
-    if (plugin) initial.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
-    box.appendChild(initial);
+    if (plugin) {
+      const mark = el("div", "pws-initial");
+      mark.appendChild(icon("puzzle", "pws-icon pws-badge-icon"));
+      box.appendChild(mark);
+    } else if (project) box.appendChild(el("div", "pws-placeholder-project", project));
     box.appendChild(el("div", "pws-placeholder-text", plugin ? "Plugin screen" : "No preview yet"));
     return box;
   }
@@ -1227,10 +1205,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     else if (key === "ArrowRight" || key === "ArrowDown") move(1);
     else if (key === "ArrowLeft" || key === "ArrowUp") move(-1);
     else if (key === "Backspace") setQuery(e.ctrlKey || e.altKey ? "" : query.slice(0, -1));
-    // Number keys jump to a card until a filter is typed; then they search pull request numbers too.
-    else if (!query && /^[1-9]$/.test(key)) {
-      if (Number(key) <= cards.length) commit(Number(key) - 1);
-    } else if (key.length === 1 && (!e.metaKey || SHORTCUTS[shortcut].modifier === "Meta") && (query || key !== " ")) setQuery(query + key);
+    else if (key.length === 1 && (!e.metaKey || SHORTCUTS[shortcut].modifier === "Meta") && (query || key !== " ")) setQuery(query + key);
   }
 
   function onKeyUp(e: any) {
@@ -1423,7 +1398,7 @@ function latest(...times: Array<string | null | undefined>): number {
 }
 
 const PR_ICON = { open: "pr", draft: "prDraft", merged: "merge", closed: "prClosed" } as const;
-const CHECK_ICON = { success: "circleCheck", failure: "circleX", pending: "circle" } as const;
+const CHECK_ICON = { success: "check", failure: "x", pending: "clock" } as const;
 /** "pending", not Paseo's "running", so checks never read like the agent's own status. */
 const CHECK_LABEL = { success: "passed", failure: "failed", pending: "pending" } as const;
 
@@ -1434,6 +1409,9 @@ const ICONS = {
   prDraft: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M18 6V5"/><path d="M18 11v-1"/><path d="M6 9v12"/>',
   prClosed: '<circle cx="6" cy="6" r="3"/><path d="M6 9v12"/><path d="m21 3-6 6"/><path d="m21 9-6-6"/><path d="M18 11.5V15"/><circle cx="18" cy="18" r="3"/>',
   merge: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   circleCheck: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   circleX: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
   circle: '<circle cx="12" cy="12" r="10"/>',
@@ -1537,13 +1515,12 @@ const CSS = `
   display: flex; align-items: center; justify-content: center;
 }
 .pws-placeholder-text { color: var(--pws-muted); font-size: 12px; }
-.pws-number, .pws-kbd {
+.pws-kbd {
   display: inline-block; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
   border-radius: 5px; background: var(--pws-key); color: var(--pws-muted); border: 1px solid var(--pws-border);
   box-shadow: 0 1px 0 var(--pws-border);
   font: 600 11px/16px system-ui, -apple-system, sans-serif; text-align: center; font-variant-numeric: tabular-nums;
 }
-.pws-thumb .pws-number { position: absolute; top: 6px; right: 6px; }
 .pws-title { display: flex; align-items: center; gap: 7px; margin: 10px 2px 0; min-width: 0; }
 .pws-card:not(.pws-row) .pws-name {
   white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; line-height: 19px;
@@ -1599,53 +1576,70 @@ const CSS = `
   max-height: calc(100vh - max(48px, 16vh) - 150px); overflow-x: hidden; overflow-y: auto;
 }
 .pws-row {
-  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: start; column-gap: 12px;
-  width: auto; padding: 10px 12px; border-radius: 12px;
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline;
+  width: auto; padding: 10px 12px; border-radius: 12px; border: 1px solid transparent;
 }
-.pws-list .pws-number { margin-top: 1px; }
-.pws-badge {
-  width: 22px; height: 22px; border-radius: 7px; background: var(--pws-tile); color: var(--pws-muted); font-size: 12px; font-weight: 650;
-  display: flex; align-items: center; justify-content: center;
+.pws-row.pws-selected {
+  background: color-mix(in srgb, var(--pws-run) 12%, transparent);
+  border-color: color-mix(in srgb, var(--pws-run) 38%, transparent);
+  box-shadow: none;
 }
-.pws-main { min-width: 0; }
-.pws-list .pws-name {
-  display: block; font-size: 14px; line-height: 20px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+.pws-lead { grid-row: 1 / span 2; grid-column: 1; align-self: start; height: 20px; display: flex; align-items: center; justify-content: center; }
+.pws-l1 { grid-column: 2; grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
+.pws-status { grid-column: 3; grid-row: 1; justify-self: end; text-align: right; font-size: 12px; line-height: 20px; font-weight: 550; color: var(--pws-muted); font-variant-numeric: tabular-nums; }
+.pws-status-running { color: var(--pws-run); }
+.pws-status-needs-you { color: var(--pws-wait); }
+.pws-state { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--pws-muted); }
+.pws-state-running { background: var(--pws-run); animation: pws-pulse 1.8s ease-out infinite; }
+.pws-state-needs-you { background: var(--pws-wait-dot); }
+.pws-list .pws-name { display: block; font-size: 14px; line-height: 20px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.pws-tag {
+  flex: 0 0 auto; padding: 0 5px; border: 1px solid var(--pws-border); border-radius: 5px;
+  color: var(--pws-muted); font-size: 11px; line-height: 16px; font-weight: 500;
 }
-.pws-list .pws-meta { flex-wrap: wrap; align-items: center; gap: 2px 12px; margin: 3px 0 0; line-height: 17px; }
-.pws-part { white-space: nowrap; }
-.pws-branch { white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+.pws-row .pws-where {
+  grid-column: 2; grid-row: 2; margin-top: 3px; min-width: 0; font-size: 12px; line-height: 17px; color: var(--pws-muted);
+  white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+}
+.pws-branch { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+.pws-facts {
+  grid-column: 3; grid-row: 2; justify-self: end; margin-top: 3px; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap;
+  gap: 2px 10px; font-size: 12px; line-height: 17px; color: var(--pws-muted); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.pws-fact { display: inline-flex; align-items: center; gap: 4px; }
+.pws-diff { gap: 5px; }
 .pws-icon { width: 13px; height: 13px; flex: 0 0 auto; }
-.pws-icon.pws-badge-icon { width: 14px; height: 14px; }
+.pws-icon.pws-badge-icon { width: 14px; height: 14px; color: var(--pws-muted); }
 .pws-initial .pws-badge-icon { width: 20px; height: 20px; }
-.pws-pr, .pws-checks, .pws-ahead { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.pws-placeholder-project { color: var(--pws-muted); font-size: 13px; font-weight: 550; padding: 0 12px; text-align: center; overflow-wrap: anywhere; }
 .pws-pr { color: var(--pws-fg); }
 .pws-pr-open .pws-icon { color: var(--pws-ok); }
-.pws-pr-draft .pws-icon, .pws-pr-closed { color: var(--pws-muted); }
+.pws-pr-draft .pws-icon { color: var(--pws-muted); }
 .pws-pr-closed .pws-icon { color: var(--pws-bad); }
-.pws-pr-merged { color: var(--pws-merged); }
-.pws-hidden { font-style: italic; }
-.pws-checks-success, .pws-approved { color: var(--pws-ok); }
-.pws-checks-failure, .pws-changes { color: var(--pws-bad); }
+.pws-pr-merged .pws-icon { color: var(--pws-merged); }
+.pws-checks-success { color: var(--pws-ok); }
+.pws-checks-failure { color: var(--pws-bad); }
 .pws-checks-pending { color: var(--pws-wait); }
-.pws-side { text-align: right; font-size: 12px; line-height: 20px; white-space: nowrap; }
-.pws-status { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-weight: 550; color: var(--pws-fg); }
-.pws-status-needs_input { color: var(--pws-wait); }
-.pws-status-failed { color: var(--pws-bad); }
-.pws-time { color: var(--pws-muted); font-variant-numeric: tabular-nums; line-height: 17px; margin-top: 3px; }
-.pws-status + .pws-time { margin-top: 0; }
 @media (max-width: 599px) {
-  .pws-row { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 10px; padding: 10px; }
-  .pws-badge { display: none; }
+  .pws-row { column-gap: 10px; padding: 10px; }
   .pws-note { padding-left: 12px; }
+}
+/* Narrow: the right-hand facts drop below the left content instead of squeezing it. */
+@media (max-width: 480px) {
+  .pws-row { grid-template-columns: 20px minmax(0, 1fr); }
+  .pws-status { grid-column: 2; grid-row: 3; justify-self: start; text-align: left; margin-top: 3px; }
+  .pws-facts { grid-column: 2; grid-row: 4; justify-self: start; justify-content: flex-start; }
 }
 @keyframes pws-fade { from { opacity: 0; } }
 @keyframes pws-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+@keyframes pws-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pws-run) 50%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
 @keyframes pws-turn { to { transform: rotate(360deg); } }
 @keyframes pws-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .pws-root, .pws-sheet, .pws-hint, .pws-caret { animation: none; }
   .pws-card { transition: none; }
   /* A still ring reads as "in progress" without turning. */
+  .pws-state-running { animation: none; }
   .pws-spin { animation: none; border-style: dotted; border-top-color: currentColor; }
 }
 `;

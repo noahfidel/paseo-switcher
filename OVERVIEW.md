@@ -4,7 +4,7 @@ Arc-style workspace switching for the Paseo desktop app. Hold Cmd and tap ` (the
 
 - Cmd+` / Cmd+Shift+`: open the switcher and move forward or back (or Ctrl+Tab, Option+Tab or Ctrl+`, see the Shortcut setting)
 - Release the modifier (Cmd, or Ctrl or Option for the other shortcuts): switch to the selected workspace
-- Arrow keys move, Enter switches, 1 to 9 jump straight to a row, Esc cancels
+- Arrow keys move, Enter switches, Esc cancels
 - Typing filters all workspaces and keeps the switcher open until Enter or a click; Esc clears the filter
 - Hovering a row selects it and clicking switches to it
 
