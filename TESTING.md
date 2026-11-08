@@ -122,7 +122,7 @@ P10 and P11 read the `pws:snapshot`, `pws:serialize` (with its `pws:xml` and `pw
 
 **Lifecycle (R, E):** after a plugin reload there is exactly one switcher, which still claims Ctrl+Tab (`--reload` only). The plugin raised no page errors.
 
-**Icons (manual, not in `npm run e2e`):** open a plugin screen that has a header icon, stay a second, then open the switcher in List layout: its row shows that icon, muted, and a screen with no icon keeps the puzzle. With paseo-bots installed, a workspace whose latest chat is with a bot shows the bot's avatar at 16px, also after navigating (which re-runs the plugin) and after editing the bot on the Bots screen while the switcher is open.
+**Icons (manual, not in `npm run e2e`):** open a plugin screen that has a header icon, stay a second, then open the switcher in List layout: its row shows that icon, muted, and a screen with no icon keeps the puzzle. With paseo-bots installed, a workspace whose most recently active bot-labelled chat is with a bot shows the bot's avatar at 16px, also after navigating (which re-runs the plugin) and after editing the bot on the Bots screen while the switcher is open.
 
 ## When a check fails
 
