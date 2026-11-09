@@ -3,6 +3,8 @@ import {
   agentIdFromTabTestId,
   agentStateBucket,
   agentToOpen,
+  canDrillInto,
+  chatListState,
   chatFacts,
   chatTitle,
   chatsForWorkspace,
@@ -329,6 +331,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     total: number;
     /** The agent list for this host has loaded. */
     loaded: boolean;
+    /** The last load of the agent list failed. */
+    failed: boolean;
     index: number;
     query: string;
   } | null = null;
@@ -589,12 +593,18 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
         agentsAt = Date.now();
         const before = visits;
         countMessageVisits();
+        if (drill) drill.failed = false;
         if (root && drill) refreshChats();
         if (root && visits !== before) refreshCardsAndRender();
         else if (root && drill) render();
       })
       .catch(() => {
-        // Keep the previous list; switching then uses only the remembered agent.
+        // Keep the previous list; switching then uses only the remembered agent. An open chat list
+        // stops waiting and says it could not load.
+        if (drill) {
+          drill.failed = true;
+          if (root) render();
+        }
       })
       .finally(() => {
         if (loadingAgents === promise) loadingAgents = null;
@@ -986,8 +996,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   /** Replaces the list with the selected workspace's chats. Plugin screens have none. */
   function drillIn() {
     const card = cards[index];
-    if (!card || card.screen) return;
-    drill = { key: card.key, name: card.info?.name ?? rowLabel(card.key) ?? "Workspace", chats: [], total: 0, loaded: false, index: 0, query: "" };
+    if (!card || !canDrillInto(card, serverId())) return;
+    drill = { key: card.key, name: card.info?.name ?? rowLabel(card.key) ?? "Workspace", chats: [], total: 0, loaded: false, failed: false, index: 0, query: "" };
     refreshChats();
     clearTimeout(showTimer);
     render();
@@ -1252,10 +1262,14 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
 
   function chatEmptyState(): Node {
     const box = el("div", "pws-empty");
-    if (drill?.query) {
-      box.appendChild(el("div", "pws-empty-title", `No chat matches “${drill.query}”`));
+    const state = drill ? chatListState({ loaded: drill.loaded, failed: drill.failed, query: drill.query, shown: drill.chats.length }) : "loading";
+    if (state === "no-match") {
+      box.appendChild(el("div", "pws-empty-title", `No chat matches “${drill?.query}”`));
       box.appendChild(el("div", "pws-empty-text", "Chat titles are searched."));
-    } else if (!drill?.loaded) {
+    } else if (state === "failed") {
+      box.appendChild(el("div", "pws-empty-title", "Couldn’t load this workspace’s chats"));
+      box.appendChild(el("div", "pws-empty-text", "Enter opens the workspace."));
+    } else if (state === "loading") {
       const title = el("div", "pws-empty-title pws-loading");
       title.appendChild(el("span", "pws-spin"));
       title.appendChild(el("span", "", "Loading chats"));
@@ -1354,8 +1368,9 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       return bar;
     }
     const arrows = listShown() ? ["↑", "↓"] : ["←", "→"];
-    // Only workspaces have chats; with plugin screens alone there is nothing to open.
-    const chats = cards.some((c) => !c.screen) ? () => keys([listShown() ? "→" : "↓"], "chats") : () => {};
+    // Only workspaces on this host have chats to list; with none on show, "chats" is left out.
+    const host = serverId();
+    const chats = cards.some((c) => canDrillInto(c, host)) ? () => keys([listShown() ? "→" : "↓"], "chats") : () => {};
     if (query && !cards.length) {
       keys(["Backspace"], "edit");
       keys(["Esc"], "clear");
@@ -1726,7 +1741,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
         layout: listShown() ? "list" : "strip",
         drilled: Boolean(drill),
         query: filter,
-        canDrill: Boolean(card && !card.screen),
+        canDrill: canDrillInto(card, serverId()),
         hasSelection: Boolean(card),
         metaTypes: SHORTCUTS[shortcut].modifier === "Meta",
       },

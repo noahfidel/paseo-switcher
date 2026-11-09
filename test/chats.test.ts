@@ -3,13 +3,16 @@ import { test } from "node:test";
 import {
   UNTITLED_CHAT,
   agentStateBucket,
+  canDrillInto,
   chatFacts,
+  chatListState,
   chatTitle,
   chatsForWorkspace,
   filterChats,
   keyAction,
   rowFacts,
   type AgentInfo,
+  type Card,
   type KeyState,
 } from "../client/model.ts";
 
@@ -74,6 +77,36 @@ test("filterChats keeps the order and matches every word of the title", () => {
   assert.deepEqual(filterChats(list, "cache FIX").map((a) => a.id), ["1"]);
   assert.deepEqual(filterChats(list, "new agent").map((a) => a.id), ["3"]);
   assert.deepEqual(filterChats(list, "  ").map((a) => a.id), ["1", "2", "3"]);
+});
+
+// ---- which rows have chats, and what the chat list says ------------------------------------------------
+
+const wsCard = (serverId: string, info = true): Card => ({
+  key: `${serverId}:w`,
+  serverId,
+  workspaceId: "w",
+  info: info ? { id: "w", name: "w", project: "p", branch: null, status: "done", additions: 0, deletions: 0, activityAt: 0 } : null,
+});
+
+test("canDrillInto: only a workspace on the current host with its data loaded", () => {
+  assert.equal(canDrillInto(wsCard("s"), "s"), true);
+  assert.equal(canDrillInto(wsCard("other"), "s"), false);
+  assert.equal(canDrillInto(wsCard("s", false), "s"), false);
+  assert.equal(canDrillInto(wsCard("s"), null), false);
+  assert.equal(canDrillInto({ key: "plugin-screen|s|p|x", serverId: "s", workspaceId: "", info: null, screen: { pluginId: "p", screenId: "x", title: "X" } } as Card, "s"), false);
+  assert.equal(canDrillInto(undefined, "s"), false);
+});
+
+test("chatListState: loading until the agents load or fail, then the list, empty, failed or no match", () => {
+  const s = (over: Partial<Parameters<typeof chatListState>[0]>) => chatListState({ loaded: false, failed: false, query: "", shown: 0, ...over });
+  assert.equal(s({}), "loading");
+  assert.equal(s({ failed: true }), "failed");
+  assert.equal(s({ loaded: true }), "empty");
+  assert.equal(s({ loaded: true, shown: 2 }), "list");
+  assert.equal(s({ loaded: true, query: "x" }), "no-match");
+  // Chats from an earlier load still show after a failed refresh.
+  assert.equal(s({ loaded: true, failed: true, shown: 2 }), "list");
+  assert.equal(s({ loaded: true, failed: true }), "failed");
 });
 
 // ---- keys -----------------------------------------------------------------------------------------

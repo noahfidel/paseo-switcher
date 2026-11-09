@@ -293,13 +293,13 @@ The one floating panel: `panel` over a 28px blur, a 1px `border` edge, the sheet
 
 ### Chats of a workspace
 
-→ on a workspace row (↓ on a thumbnail card) replaces the list in place with that workspace's chats; ← (or a click on the header) goes back with the selection on the same workspace and its filter as it was. Plugin screens have no chats, so → does nothing there. Chats only: Paseo has no route that focuses a terminal tab.
+→ on a workspace row (↓ on a thumbnail card) replaces the list in place with that workspace's chats; ← (or a click on the header) goes back with the selection on the same workspace and its filter as it was. Plugin screens have no chats, and the agent list is the current host's alone, so → does nothing on a plugin screen, a workspace on another host, or one whose data has not loaded. Chats only: Paseo has no route that focuses a terminal tab.
 
 - **Header:** a 44px bar with a bottom rule: a ← keycap, the workspace name in 600 14px, and a right-aligned muted tabular count ("1 chat", "3 chats"; empty while loading). Under it the query header, once there is a query.
 - **Chat row:** the list row's grid with one line: the Lucide `message-square` in the muted lead slot, the chat's title (Paseo's "New agent" when it has none) with marked letters when filtering, and on the right the same status mark and label as a workspace row, from Paseo's own bucket for the chat (permission pending: Needs input; error: Failed; running: Running, timed from the turn's start; finished and not looked at: Finished; else "1h ago" from its last change). No facts line and no × (a chat cannot be hidden).
 - **Order:** the chat last focused in that workspace, then the rest by last change, with chats a routine, a bot's ask or the PR review watcher started after yours. Archived and internal chats are left out.
 - **Always a list,** in the Thumbnails layout too.
-- **States:** "Loading chats" with a spinner; "No chats in this workspace" / "Enter opens the workspace."; "No chat matches “x”" / "Chat titles are searched."
+- **States:** "Loading chats" with a spinner; "Couldn’t load this workspace’s chats" / "Enter opens the workspace." when the agent list fails; "No chats in this workspace" / "Enter opens the workspace."; "No chat matches “x”" / "Chat titles are searched."
 - **Commit:** Enter, releasing the held modifier or a click opens the chat through the workspace route with `?open=agent:<id>`, and remembers it as that workspace's last focused chat.
 
 ### Thumbnail card

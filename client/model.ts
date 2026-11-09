@@ -747,6 +747,22 @@ export function chatsForWorkspace(agents: readonly AgentInfo[] | null | undefine
     .sort((a, b) => rank(a) - rank(b) || b.activityAt - a.activityAt);
 }
 
+/**
+ * A row whose chats can be listed: a workspace with its data loaded, on the host this window shows (the
+ * agent list is that host's alone). Plugin screens have no chats.
+ */
+export function canDrillInto(card: Card | undefined, currentServerId: string | null): boolean {
+  return Boolean(card && !card.screen && card.info && currentServerId && card.serverId === currentServerId);
+}
+
+/** What the chat list shows: the chats, or why there are none. A failed load never leaves it loading. */
+export function chatListState(s: { loaded: boolean; failed: boolean; query: string; shown: number }): "list" | "loading" | "failed" | "empty" | "no-match" {
+  if (s.shown) return "list";
+  if (s.query && s.loaded) return "no-match";
+  if (s.failed) return "failed";
+  return s.loaded ? "empty" : "loading";
+}
+
 /** Chats whose title contains every word of the query, in the order given. */
 export function filterChats(chats: readonly AgentInfo[], query: string): AgentInfo[] {
   const words = queryWords(query);
