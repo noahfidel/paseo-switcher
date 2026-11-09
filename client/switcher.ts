@@ -39,6 +39,7 @@ import {
   sidebarRowSelector,
   DEFAULT_REPO_ICONS,
   parseRepoIcons,
+  repoIconKey,
   repoIconRoots,
   repoIconTtl,
   repoIconUrl,
@@ -1191,11 +1192,13 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   function requestRepoIcons() {
     const ask = options.projectIcon;
     if (!repoIcons || !ask) return;
-    const roots = repoIconRoots(cards, repoIconCache, repoIconPending, Date.now());
-    if (!roots.length) return;
-    for (const root of roots) repoIconPending.add(root);
+    const host = serverId();
+    const roots = host ? repoIconRoots(cards, repoIconCache, repoIconPending, Date.now(), host) : [];
+    if (!host || !roots.length) return;
+    for (const root of roots) repoIconPending.add(repoIconKey(host, root));
     setTimeout(() => {
       for (const root of roots) {
+        const key = repoIconKey(host, root);
         Promise.resolve()
           .then(() => ask(root))
           // A failed request is asked again in a minute, not kept as "no icon" for a day.
@@ -1205,9 +1208,9 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
           )
           .then((answer) => {
             const url = repoIconUrl(answer?.icon);
-            repoIconPending.delete(root);
-            repoIconCache.set(root, { url, at: Date.now(), ttl: repoIconTtl(answer) });
-            if (url && root && repoIcons && cards.some((c) => c.info?.projectRoot === root)) render();
+            repoIconPending.delete(key);
+            repoIconCache.set(key, { url, at: Date.now(), ttl: repoIconTtl(answer) });
+            if (url && repoIcons && cards.some((c) => c.serverId === host && c.info?.projectRoot === root)) render();
           });
       }
     }, 0);
@@ -1216,7 +1219,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   /** The repo icon of a workspace card, when one is known and the setting is on. */
   function repoIcon(card: Card, px: number): Node | null {
     const root = card.info?.projectRoot;
-    const url = repoIcons && root && !card.screen ? repoIconCache.get(root)?.url : null;
+    const url = repoIcons && root && !card.screen ? repoIconCache.get(repoIconKey(card.serverId, root))?.url : null;
     const safe = url ? safeImageUrl(url, { svg: true }) : null;
     return safe ? imageNode(safe, "pws-avatar pws-repo-icon", px) : null;
   }

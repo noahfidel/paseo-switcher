@@ -22,6 +22,7 @@ import {
   REPO_ICON_RETRY_MS,
   REPO_ICON_TTL_MS,
   parseRepoIcons,
+  repoIconKey,
   repoIconRoots,
   repoIconTtl,
   repoIconUrl,
@@ -364,16 +365,27 @@ const ws = (id: string, projectRoot?: string): Card => ({
 
 test("repoIconRoots asks once per project root for what is on show and not cached or pending", () => {
   const cards: Card[] = [ws("a", "/r1"), ws("b", "/r1"), ws("c", "/r2"), ws("d"), ws("e", "/r3"), { key: "plugin-screen|x|y|z", serverId: "x", workspaceId: "", info: null }];
-  const cache = new Map([["/r3", { url: null, at: 100 }]]);
-  assert.deepEqual(repoIconRoots(cards, cache, new Set(["/r2"]), 200), ["/r1"]);
+  const cache = new Map([[repoIconKey("s", "/r3"), { url: null, at: 100 }]]);
+  assert.deepEqual(repoIconRoots(cards, cache, new Set([repoIconKey("s", "/r2")]), 200, "s"), ["/r1"]);
   // A cached answer is asked again after a day.
-  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + 24 * 60 * 60 * 1000 + 1), ["/r3"]);
+  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + 24 * 60 * 60 * 1000 + 1, "s"), ["/r3"]);
+});
+
+test("repo icons are kept per host, and asked only of the host this window shows", () => {
+  assert.notEqual(repoIconKey("s", "/r"), repoIconKey("t", "/r"));
+  assert.notEqual(repoIconKey("a:b", "c"), repoIconKey("a", "b:c"));
+  const other: Card = { ...ws("x", "/r1"), key: "t:x", serverId: "t" };
+  // The same path on another host is a different project and is not asked of this one.
+  const cache = new Map([[repoIconKey("t", "/r1"), { url: "data:image/png;base64,iVBO", at: 100 }]]);
+  assert.deepEqual(repoIconRoots([ws("a", "/r1"), other], cache, new Set(), 200, "s"), ["/r1"]);
+  assert.deepEqual(repoIconRoots([other], new Map(), new Set(), 200, "s"), []);
+  assert.deepEqual(repoIconRoots([ws("a", "/r1")], new Map(), new Set(), 200, null), []);
 });
 
 test("repoIconRoots asks again after a minute when the last answer failed or said to retry", () => {
-  const cache = new Map([["/r3", { url: null, at: 100, ttl: REPO_ICON_RETRY_MS }]]);
-  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + REPO_ICON_RETRY_MS), []);
-  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + REPO_ICON_RETRY_MS + 1), ["/r3"]);
+  const cache = new Map([[repoIconKey("s", "/r3"), { url: null, at: 100, ttl: REPO_ICON_RETRY_MS }]]);
+  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + REPO_ICON_RETRY_MS, "s"), []);
+  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + REPO_ICON_RETRY_MS + 1, "s"), ["/r3"]);
   assert.equal(REPO_ICON_RETRY_MS, 60_000);
 });
 

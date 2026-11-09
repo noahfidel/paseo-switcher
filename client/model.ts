@@ -1018,16 +1018,27 @@ export function repoIconTtl(answer: ProjectIconAnswer | null): number {
   return !answer || answer.retry ? REPO_ICON_RETRY_MS : REPO_ICON_TTL_MS;
 }
 
-/** A project root's icon as last answered (null: none), when, and for how long (a day when absent). */
+/** A project's icon as last answered (null: none), when, and for how long (a day when absent); keyed by `repoIconKey`. */
 export type RepoIconCache = ReadonlyMap<string, { url: string | null; at: number; ttl?: number }>;
 
-/** Project roots of the workspaces on show that have no fresh answer and no request in flight, each once. */
-export function repoIconRoots(cards: readonly Card[], cache: RepoIconCache, pending: ReadonlySet<string>, now: number): string[] {
+/** The cache key of a project root on a host: the same path on two hosts is two projects. */
+export function repoIconKey(serverId: string, root: string): string {
+  return JSON.stringify([serverId, root]);
+}
+
+/**
+ * Project roots of the workspaces on show that have no fresh answer and no request in flight, each once.
+ * Only the host this window shows is asked (the RPC goes to it), so other hosts' workspaces are skipped.
+ */
+export function repoIconRoots(cards: readonly Card[], cache: RepoIconCache, pending: ReadonlySet<string>, now: number, serverId: string | null): string[] {
   const roots: string[] = [];
+  if (!serverId) return roots;
   for (const card of cards) {
     const root = card.info?.projectRoot;
-    if (!root || card.screen || pending.has(root) || roots.includes(root)) continue;
-    const hit = cache.get(root);
+    if (!root || card.screen || card.serverId !== serverId || roots.includes(root)) continue;
+    const key = repoIconKey(serverId, root);
+    if (pending.has(key)) continue;
+    const hit = cache.get(key);
     if (hit && now - hit.at <= (hit.ttl ?? REPO_ICON_TTL_MS)) continue;
     roots.push(root);
   }
