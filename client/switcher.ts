@@ -136,7 +136,10 @@ import {
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
  * - hosts: Paseo 0.15 evaluates the plugin's client once per connected host (`PluginRegistry.byHost`), each
  *          with a `paseo` API bound to that host. All of them share `globalThis.__paseoSwitcherInstalls`, and one
- *          switcher handles the keys, built in a microtask so installations that run together build it once. It reads every host's workspaces and agents through
+ *          switcher handles the keys, built in a microtask so installations that run together build it once.
+ *          The global `__paseoSwitcher` slot is shared with plugin copies of other versions on other hosts:
+ *          this code's switchers carry `multiHost` (see SWITCHER_VERSION), are never replaced by a lower tag,
+ *          and take the slot back from an untagged (older) one. It reads every host's workspaces and agents through
  *          the SDK's `getPaseoClient(serverId)`, so nothing loaded from one host is read as another's. The hosts
  *          to ask are those in the app's saved host list (localStorage `@paseo:daemon-registry`, an array of
  *          `{ serverId, label, … }`), the one on show, and those of visited workspaces. That key is not public
@@ -188,6 +191,21 @@ const CARRY_KEY = "__paseoSwitcherLists";
 const INSTALLS_KEY = "__paseoSwitcherInstalls";
 /** Global slot of the one switcher that handles the keys. */
 const ACTIVE_KEY = "__paseoSwitcher";
+/**
+ * Tag on the switchers this code builds. Plugin copies from before several hosts were supported leave it
+ * off; a later version that changes how the switcher is shared raises it. A tagged switcher is never
+ * replaced by a lower tag, and an untagged one is replaced by any tagged one.
+ */
+const SWITCHER_VERSION = 2;
+type ActiveSwitcher = Switcher & { multiHost?: number; teardown?: () => void };
+
+/** Takes down a switcher without the reclaim its public `dispose` does (see `createSwitcher`). */
+function retire(active: ActiveSwitcher | undefined) {
+  if (!active) return;
+  if (active.teardown) active.teardown();
+  else active.dispose();
+}
+
 /** Global flag: a switcher build is queued, so a burst of installations builds one. */
 const BUILD_KEY = "__paseoSwitcherBuild";
 /** A tap shorter than this switches without ever drawing the strip. */
@@ -345,8 +363,9 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       if (at === -1) return;
       installs.splice(at, 1);
       mine.listeners.clear();
-      // Another host's installation keeps the switcher; the last one takes it down.
-      if (!installs.length) active().dispose();
+      // Another host's installation keeps the switcher; the last one takes it down, but never one it did not make.
+      const current: ActiveSwitcher | undefined = g[ACTIVE_KEY];
+      if (!installs.length && typeof current?.multiHost === "number") retire(current);
     },
   };
 }
@@ -362,6 +381,9 @@ function scheduleBuild() {
     g[BUILD_KEY] = false;
     const installs = g[INSTALLS_KEY];
     if (!g.document || !g.window || !Array.isArray(installs) || !installs.length) return;
+    // A newer plugin copy's switcher stays; it reads the same installations.
+    const current: ActiveSwitcher | undefined = g[ACTIVE_KEY];
+    if (typeof current?.multiHost === "number" && current.multiHost > SWITCHER_VERSION) return;
     createSwitcher(installs);
   });
 }
@@ -379,7 +401,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   const doc = g.document;
   const win = g.window;
   // Only one switcher may own the keyboard: this one replaces the last (which leaves its lists behind).
-  g[ACTIVE_KEY]?.dispose();
+  retire(g[ACTIVE_KEY]);
   // While the switcher is open it owns the keyboard, so typing to filter never fires a Paseo shortcut.
   let shortcut = parseShortcut(readJson(SHORTCUT_KEY, DEFAULT_SHORTCUT));
   const keys = claimKeys(() => open, () => shortcut);
@@ -2117,7 +2139,8 @@ function createSwitcher(installs: Installation[]): Switcher {
   loadWorkspaces();
   loadAgents();
 
-  const api: Switcher = {
+  const api: ActiveSwitcher = {
+    multiHost: SWITCHER_VERSION,
     open: () => begin("sticky", 1),
     getLimit: () => limit,
     setLimit(next) {
@@ -2198,7 +2221,13 @@ function createSwitcher(installs: Installation[]): Switcher {
       for (const inst of installs) for (const listener of inst.listeners) listener(shortcut);
     },
     onShortcutChange: () => () => {},
+    // Only an older plugin copy calls this, as it replaces the switcher with its own. While this code's
+    // installations are live, that one is replaced again, so the keys stay with this switcher.
     dispose() {
+      api.teardown?.();
+      if (installs.length) scheduleBuild();
+    },
+    teardown() {
       if (disposed) return;
       disposed = true;
       generation++;

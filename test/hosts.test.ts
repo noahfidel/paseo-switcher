@@ -306,3 +306,70 @@ test("a switcher's loads that land after it is gone change nothing", async () =>
     cleanGlobals();
   }
 });
+
+/** What a plugin copy from before several hosts were supported does: replace whatever switcher is up. */
+function installOld(page: { keydown: () => number }) {
+  const onKey = () => {};
+  g.__paseoSwitcher?.dispose();
+  g.window.addEventListener("keydown", onKey);
+  const old: any = {
+    disposed: false,
+    dispose() {
+      old.disposed = true;
+      g.window.removeEventListener("keydown", onKey);
+      if (g.__paseoSwitcher === old) g.__paseoSwitcher = undefined;
+    },
+  };
+  g.__paseoSwitcher = old;
+  return old;
+}
+
+test("an older plugin copy on another host cannot take the keys from this one", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_1");
+  try {
+    const a = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.equal(typeof g.__paseoSwitcher.multiHost, "number", "this code's switcher is tagged");
+    const old = installOld(page);
+    await tick();
+    assert.equal(old.disposed, true, "the older switcher is replaced again");
+    assert.equal(typeof g.__paseoSwitcher?.multiHost, "number");
+    assert.equal(page.keydown(), 1);
+    a.dispose();
+    assert.equal(page.keydown(), 0);
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("the last installation going leaves an untagged switcher it did not make alone", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_1");
+  try {
+    const a = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    const old = installOld(page);
+    a.dispose();
+    await tick();
+    assert.equal(old.disposed, false);
+    assert.equal(g.__paseoSwitcher, old);
+    assert.equal(page.keydown(), 1);
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a newer plugin copy's switcher is not replaced by this one", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_1");
+  try {
+    let replaced = false;
+    const newer = { multiHost: 99, dispose: () => (replaced = true), teardown: () => (replaced = true) };
+    g.__paseoSwitcher = newer;
+    installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.equal(replaced, false);
+    assert.equal(g.__paseoSwitcher, newer);
+    assert.equal(page.keydown(), 0, "this code added no key handler of its own");
+  } finally {
+    cleanGlobals();
+  }
+});
