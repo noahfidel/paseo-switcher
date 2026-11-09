@@ -25,6 +25,10 @@ import {
   MAX_AVATAR_BYTES,
   sanitizeSvg,
   scopeSvgIds,
+  cleanScreenIcon,
+  isImageIcon,
+  nextScreenIcon,
+  sidebarRowSelector,
   migrateHidden,
   clampIndex,
   setHidden,
@@ -89,6 +93,12 @@ import {
  *          The screen's own icon is the <svg> in the header badge that is the title's previous sibling (Paseo renders
  *          `HeaderIconBadge` then `ScreenTitle` in one fragment, so the badge is the title's previous sibling). That header DOM is not public either: re-check it
  *          on every Paseo upgrade. The markup is sanitized before it is stored or drawn.
+ *          Screens registered with addScreen + a sidebar item get no header badge, so the icon of the plugin's
+ *          highlighted sidebar row wins: `SidebarRow` renders a pressable with test ID
+ *          `plugin-sidebar-<pluginId>-<itemId>[-<rowId>]` (footer: `plugin-sidebar-footer-…`) and
+ *          `aria-selected="true"` while the plugin marks it active (see `sidebarRowSelector`). Its first <svg>
+ *          (sanitized) or <img> with a raster data URL is the icon. Only a plugin's own rows know its current
+ *          screen, so another plugin's row is never active then. Not public either: re-check on every upgrade.
  *          Paseo 0.15 re-runs the plugin after each such navigation, so a disposed switcher leaves its
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
  * Outside a workspace (the home screen) with no history yet, the host is found by matching a loaded
@@ -353,10 +363,15 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function noteScreen(key: string, route: { pluginId: string; search: string }) {
     const titleNode = doc.querySelector(SCREEN_TITLE);
     const shown: string | null = titleNode?.textContent?.trim() || null;
-    // With the title on show, its badge decides: no badge clears a stale or wrongly captured icon.
-    // Before the title is drawn, keep what was stored.
-    const icon = titleNode ? screenIconSvg(titleNode) ?? undefined : screens[key]?.icon;
-    const next = recordScreen(screens, key, { title: shown ?? screens[key]?.title ?? screenTitle(null, route.pluginId), search: route.search, icon });
+    // The highlighted sidebar row's icon wins; else the header badge decides once the title is drawn.
+    const row = doc.querySelector(sidebarRowSelector(route.pluginId));
+    const icon = nextScreenIcon(screens[key], {
+      row: row ? sidebarRowIcon(row) : null,
+      title: Boolean(titleNode),
+      badge: titleNode ? screenIconSvg(titleNode) : null,
+    });
+    const title = shown ?? screens[key]?.title ?? screenTitle(null, route.pluginId);
+    const next = recordScreen(screens, key, { title, search: route.search, ...icon });
     if (next === screens) return;
     screens = next;
     writeJson(SCREENS_KEY, screens);
@@ -369,6 +384,14 @@ export function installSwitcher(paseo: Paseo): Switcher {
     if (!before) return null;
     const svg = before.tagName.toLowerCase() === "svg" ? before : before.querySelector("svg");
     return svg ? sanitizeSvg(svg.outerHTML) : null;
+  }
+
+  /** The icon a sidebar row draws first: an svg (sanitized) or an img with a small raster data URL. */
+  function sidebarRowIcon(row: Node): string | null {
+    const found = row.querySelector("svg, img");
+    if (!found) return null;
+    if (found.tagName.toLowerCase() === "img") return cleanScreenIcon(found.getAttribute("src"));
+    return sanitizeSvg(found.outerHTML);
   }
 
   function syncRoute() {
@@ -1234,10 +1257,30 @@ export function installSwitcher(paseo: Paseo): Switcher {
   /** What a row or placeholder says it is: a screen's own icon, a bot's avatar, else the generic icon. */
   function leadIcon(card: Card, fallback: "gitBranch" | "folder"): Node {
     if (card.screen) {
-      const own = card.screen.icon ? drawSvg(card.screen.icon, "pws-icon pws-badge-icon") : null;
+      const own = card.screen.icon ? drawScreenIcon(card.screen.icon) : null;
       return own ?? icon("puzzle", "pws-icon pws-badge-icon");
     }
     return botAvatar(card, 16) ?? icon(fallback, "pws-icon pws-badge-icon");
+  }
+
+  /** A screen's stored icon: a raster data URL as an img, else svg markup. Both are cleaned again before drawing. */
+  function drawScreenIcon(stored: string): Node | null {
+    if (!isImageIcon(stored)) return drawSvg(stored, "pws-icon pws-badge-icon");
+    const url = cleanScreenIcon(stored);
+    return url ? imageNode(url, "pws-icon pws-badge-icon pws-icon-img") : null;
+  }
+
+  function imageNode(url: string, className: string, px?: number): Node {
+    const img = el("img", className) as any;
+    img.setAttribute("src", url);
+    img.setAttribute("alt", "");
+    if (px) {
+      img.setAttribute("width", String(px));
+      img.setAttribute("height", String(px));
+    }
+    img.setAttribute("referrerpolicy", "no-referrer");
+    img.setAttribute("draggable", "false");
+    return img;
   }
 
   /** Draws svg markup that already went through sanitizeSvg (stored values are sanitized again on load). */
@@ -1279,15 +1322,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
       if (node) return node;
     }
     const url = safeImageUrl(found.imageUrl);
-    if (!url) return null;
-    const img = el("img", "pws-avatar pws-avatar-img") as any;
-    img.setAttribute("src", url);
-    img.setAttribute("alt", "");
-    img.setAttribute("width", String(px));
-    img.setAttribute("height", String(px));
-    img.setAttribute("referrerpolicy", "no-referrer");
-    img.setAttribute("draggable", "false");
-    return img;
+    return url ? imageNode(url, "pws-avatar pws-avatar-img", px) : null;
   }
 
   function botAvatarsApi(): BotAvatarsApi | null {
@@ -1844,6 +1879,7 @@ const CSS = `
 .pws-hide:hover { color: var(--pws-bad); }
 .pws-icon.pws-badge-icon { width: 14px; height: 14px; color: var(--pws-muted); }
 .pws-initial .pws-badge-icon { width: 20px; height: 20px; }
+.pws-icon-img { display: block; object-fit: contain; }
 .pws-avatar { width: 16px; height: 16px; flex: 0 0 auto; display: block; }
 .pws-avatar-img { object-fit: cover; border-radius: 50%; }
 .pws-initial.pws-avatar-tile { background: none; }

@@ -176,7 +176,7 @@ export interface ScreenStop {
   title: string;
   /** The query string last seen on the screen (`?param.…`), or "". */
   search: string;
-  /** Sanitized svg of the screen's own header icon, when one was seen. */
+  /** The screen's own icon when one was seen: sanitized svg, or a raster data URL (see `isImageIcon`). */
   icon?: string;
 }
 
@@ -278,14 +278,67 @@ export function screenTitle(shown: string | null | undefined, pluginId: string):
   return shown?.trim() || prettifyPluginId(pluginId);
 }
 
+/** Where a screen's icon was read: its highlighted sidebar row, or the badge beside its header title. */
+export type IconSource = "row" | "badge";
+
 export interface ScreenMeta {
   title: string;
   search: string;
-  /** The screen's header icon as sanitized svg markup; absent when none was captured. */
+  /** The screen's icon: sanitized svg markup, or a raster data URL; absent when none was captured. */
   icon?: string;
+  /** Where `icon` came from; a stored icon without one predates rows and counts as a badge icon. */
+  iconFrom?: IconSource;
 }
 /** Latest title and params per screen key. */
 export type Screens = Record<string, ScreenMeta>;
+
+/** Size limit for a raster screen icon (a data URL), such as a tinted PNG mark in a sidebar row. */
+export const MAX_RASTER_ICON_BYTES = 16 * 1024;
+
+/** Whether an icon is a raster data URL (drawn as an img) rather than svg markup. */
+export function isImageIcon(icon: string): boolean {
+  return icon.startsWith("data:");
+}
+
+/** A screen icon safe to store and draw: sanitized svg, or a raster data URL of at most MAX_RASTER_ICON_BYTES. */
+export function cleanScreenIcon(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (isImageIcon(value)) return value.length <= MAX_RASTER_ICON_BYTES && safeImageUrl(value) ? value : null;
+  return sanitizeSvg(value);
+}
+
+/**
+ * The icon to keep for a screen after looking at the page. The highlighted sidebar row's icon wins. With no
+ * such row (sidebar collapsed, or the plugin draws none), a row icon already stored is kept; otherwise the
+ * header badge decides once the title is drawn (no badge clears the icon), and before that nothing changes.
+ * `row` and `badge` are already cleaned (null when absent or unusable).
+ */
+export function nextScreenIcon(
+  stored: { icon?: string; iconFrom?: IconSource } | undefined,
+  seen: { row: string | null; title: boolean; badge: string | null },
+): { icon?: string; iconFrom?: IconSource } {
+  if (seen.row) return { icon: seen.row, iconFrom: "row" };
+  if (!seen.title || stored?.iconFrom === "row") {
+    if (!stored?.icon) return {};
+    return stored.iconFrom ? { icon: stored.icon, iconFrom: stored.iconFrom } : { icon: stored.icon };
+  }
+  return seen.badge ? { icon: seen.badge, iconFrom: "badge" } : {};
+}
+
+/**
+ * The plugin's highlighted sidebar row. Paseo gives each `SidebarRow` a test ID of
+ * `plugin-sidebar-<pluginId>-<itemId>[-<rowId>]` (footer items: `plugin-sidebar-footer-…`) and sets
+ * `aria-selected="true"` on it when the plugin marks it active. Not a public API; re-check on every upgrade.
+ */
+export function sidebarRowSelector(pluginId: string): string {
+  const id = pluginId.replace(/["\\]/g, "\\$&");
+  return `[data-testid^="plugin-sidebar-${id}-"][aria-selected="true"], [data-testid^="plugin-sidebar-footer-${id}-"][aria-selected="true"]`;
+}
+
+function screenMeta(title: string, search: string, icon: string | null | undefined, iconFrom: IconSource | undefined): ScreenMeta {
+  if (!icon) return { title, search };
+  return iconFrom ? { title, search, icon, iconFrom } : { title, search, icon };
+}
 
 export function parseScreens(value: unknown): Screens {
   const screens: Screens = {};
@@ -293,9 +346,10 @@ export function parseScreens(value: unknown): Screens {
   for (const [k, v] of Object.entries(value)) {
     const m = v as Partial<ScreenMeta> | null;
     if (!isPluginScreenKey(k) || !m || typeof m.title !== "string" || typeof m.search !== "string") continue;
-    // Stored markup is sanitized again on the way in, in case the saved value was edited.
-    const icon = typeof m.icon === "string" ? sanitizeSvg(m.icon) : null;
-    screens[k] = icon ? { title: m.title, search: m.search, icon } : { title: m.title, search: m.search };
+    // Stored icons are cleaned again on the way in, in case the saved value was edited.
+    const icon = cleanScreenIcon(m.icon);
+    const from: IconSource | undefined = m.iconFrom === "row" ? "row" : m.iconFrom === undefined ? undefined : "badge";
+    screens[k] = screenMeta(m.title, m.search, icon, from);
   }
   return screens;
 }
@@ -303,8 +357,10 @@ export function parseScreens(value: unknown): Screens {
 /** Stores the latest title and params for a screen; returns `screens` itself when nothing changed. */
 export function recordScreen(screens: Screens, key: string, meta: ScreenMeta): Screens {
   const current = screens[key];
-  if (current && current.title === meta.title && current.search === meta.search && current.icon === meta.icon) return screens;
-  return { ...screens, [key]: meta.icon ? { title: meta.title, search: meta.search, icon: meta.icon } : { title: meta.title, search: meta.search } };
+  if (current && current.title === meta.title && current.search === meta.search && current.icon === meta.icon && current.iconFrom === meta.iconFrom) {
+    return screens;
+  }
+  return { ...screens, [key]: screenMeta(meta.title, meta.search, meta.icon, meta.iconFrom) };
 }
 
 /**
