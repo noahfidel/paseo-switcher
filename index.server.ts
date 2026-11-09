@@ -6,9 +6,9 @@ import { projectIcon } from "./shared/icons";
 export default function contribute(server: PluginServerContext) {
   const icons = createProjectIconResolver();
   const known = createKnownRoots();
-  server.handle(projectIcon, async ({ rootPath }, { paseo }) => ({
-    // Only a directory Paseo lists as a project or workspace is searched.
-    icon: await icons.get(rootPath, { isKnownRoot: (root) => known.has(root, () => paseoRoots(paseo)) }),
-  }));
+  // Only a directory Paseo lists as a project or workspace is searched.
+  server.handle(projectIcon, ({ rootPath }, { paseo }) =>
+    icons.resolve(rootPath, { isKnownRoot: (root) => known.has(root, () => paseoRoots(paseo)) }),
+  );
   return () => {};
 }

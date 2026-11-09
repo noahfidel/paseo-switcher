@@ -16,5 +16,7 @@ export const projectIcon = defineRpc({
         dataBase64: z.string().max(90_000),
       })
       .nullable(),
+    /** No icon this time, but ask again soon (a timeout, the network, or a root not listed yet). */
+    retry: z.boolean().optional(),
   }),
 });

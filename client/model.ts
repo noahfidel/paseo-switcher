@@ -976,6 +976,8 @@ export function parseRepoIcons(value: unknown): boolean {
 
 /** How long the switcher keeps a project's icon (or its absence) before asking the host again. */
 export const REPO_ICON_TTL_MS = 24 * 60 * 60 * 1000;
+/** How soon to ask again after a failed request, or an answer that says to retry. */
+export const REPO_ICON_RETRY_MS = 60_000;
 
 /** What the host returns for a project: an image type and its bytes. */
 export interface ProjectIconData {
@@ -989,8 +991,19 @@ export function repoIconUrl(icon: ProjectIconData | null | undefined): string | 
   return safeImageUrl(`data:${icon.mimeType};base64,${icon.dataBase64}`, { svg: true });
 }
 
-/** A project root's icon as last answered (null: none), and when. */
-export type RepoIconCache = ReadonlyMap<string, { url: string | null; at: number }>;
+/** What the host answers for a project root: its icon or none, and whether to ask again soon. */
+export interface ProjectIconAnswer {
+  icon: ProjectIconData | null;
+  retry?: boolean;
+}
+
+/** How long to keep an answer: a day, or a minute after a failure (null) or an answer that says to retry. */
+export function repoIconTtl(answer: ProjectIconAnswer | null): number {
+  return !answer || answer.retry ? REPO_ICON_RETRY_MS : REPO_ICON_TTL_MS;
+}
+
+/** A project root's icon as last answered (null: none), when, and for how long (a day when absent). */
+export type RepoIconCache = ReadonlyMap<string, { url: string | null; at: number; ttl?: number }>;
 
 /** Project roots of the workspaces on show that have no fresh answer and no request in flight, each once. */
 export function repoIconRoots(cards: readonly Card[], cache: RepoIconCache, pending: ReadonlySet<string>, now: number): string[] {
@@ -999,7 +1012,7 @@ export function repoIconRoots(cards: readonly Card[], cache: RepoIconCache, pend
     const root = card.info?.projectRoot;
     if (!root || card.screen || pending.has(root) || roots.includes(root)) continue;
     const hit = cache.get(root);
-    if (hit && now - hit.at <= REPO_ICON_TTL_MS) continue;
+    if (hit && now - hit.at <= (hit.ttl ?? REPO_ICON_TTL_MS)) continue;
     roots.push(root);
   }
   return roots;

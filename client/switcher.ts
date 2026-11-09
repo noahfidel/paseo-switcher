@@ -38,8 +38,9 @@ import {
   DEFAULT_REPO_ICONS,
   parseRepoIcons,
   repoIconRoots,
+  repoIconTtl,
   repoIconUrl,
-  type ProjectIconData,
+  type ProjectIconAnswer,
   migrateHidden,
   clampIndex,
   setHidden,
@@ -222,7 +223,7 @@ export interface Switcher {
 
 export interface SwitcherOptions {
   /** Asks this plugin's daemon side for a project's icon (see shared/icons.ts). */
-  projectIcon?: (rootPath: string) => Promise<ProjectIconData | null>;
+  projectIcon?: (rootPath: string) => Promise<ProjectIconAnswer>;
 }
 
 export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Switcher {
@@ -298,7 +299,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   /** Show each workspace's repo icon (asked of the daemon side lazily, per project root). */
   let repoIcons = parseRepoIcons(readJson(REPO_ICONS_KEY, DEFAULT_REPO_ICONS));
   /** Answers per project root, carried across reinstalls like the lists (whatever the background setting). */
-  const repoIconCache: Map<string, { url: string | null; at: number }> = carriedIconCache instanceof Map ? carriedIconCache : new Map();
+  const repoIconCache: Map<string, { url: string | null; at: number; ttl?: number }> = carriedIconCache instanceof Map ? carriedIconCache : new Map();
   const repoIconPending = new Set<string>();
   /** Rasterized thumbnails by workspace key, oldest first. Each canvas records its theme. */
   const thumbs = new Map<string, Node>();
@@ -1187,13 +1188,15 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       for (const root of roots) {
         Promise.resolve()
           .then(() => ask(root))
+          // A failed request is asked again in a minute, not kept as "no icon" for a day.
           .then(
-            (icon) => repoIconUrl(icon),
+            (answer) => answer,
             () => null,
           )
-          .then((url) => {
+          .then((answer) => {
+            const url = repoIconUrl(answer?.icon);
             repoIconPending.delete(root);
-            repoIconCache.set(root, { url, at: Date.now() });
+            repoIconCache.set(root, { url, at: Date.now(), ttl: repoIconTtl(answer) });
             if (url && root && repoIcons && cards.some((c) => c.info?.projectRoot === root)) render();
           });
       }

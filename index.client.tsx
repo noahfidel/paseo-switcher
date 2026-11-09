@@ -9,7 +9,7 @@ export default function contribute(client: PluginClientContext) {
   // The shortcut only reaches the page in the desktop app (and the web app outside a browser tab).
   if (Platform.OS !== "web") return () => {};
   const switcher = installSwitcher(client.paseo, {
-    projectIcon: async (rootPath) => (await client.rpc(projectIcon, { rootPath })).icon,
+    projectIcon: (rootPath) => client.rpc(projectIcon, { rootPath }),
   });
   const switchItem = () =>
     client.addCommandCenterItem({

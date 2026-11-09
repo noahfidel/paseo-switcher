@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { createKnownRoots, paseoRoots } from "../server/known-roots.ts";
 import {
+  ICON_CACHE_MS,
   ICON_PATTERNS,
   MAX_CACHED_ROOTS,
+  TRANSIENT_CACHE_MS,
   MAX_REPO_ICON_BYTES,
   createProjectIconResolver,
   findRepoIcon,
@@ -15,7 +17,17 @@ import {
 } from "../server/repo-icon.ts";
 import * as contracts from "../shared/icons.ts";
 import { projectIcon } from "../shared/icons.ts";
-import { DEFAULT_REPO_ICONS, parseRepoIcons, repoIconRoots, repoIconUrl, safeImageUrl, type Card } from "../client/model.ts";
+import {
+  DEFAULT_REPO_ICONS,
+  REPO_ICON_RETRY_MS,
+  REPO_ICON_TTL_MS,
+  parseRepoIcons,
+  repoIconRoots,
+  repoIconTtl,
+  repoIconUrl,
+  safeImageUrl,
+  type Card,
+} from "../client/model.ts";
 
 const dirs: string[] = [];
 async function repo(files: Record<string, string | Buffer>): Promise<string> {
@@ -188,6 +200,67 @@ test("the resolver gives up on a slow avatar after its timeout", async () => {
   assert.equal(await r.get(dir), null);
 });
 
+// ---- transient failures are retried soon, definite answers kept a day ---------------------------------
+
+function statusFetch(status: number) {
+  const calls: string[] = [];
+  const fetch = async (url: string) => {
+    calls.push(url);
+    return new Response(status === 200 ? new Uint8Array(png(64, 64)) : "nope", { status, headers: { "content-type": status === 200 ? "image/png" : "text/plain" } });
+  };
+  return { fetch, calls };
+}
+
+test("a definite 'no icon' (no GitHub remote, a 404, not an image) is kept for a day and not marked for retry", async () => {
+  for (const [remote, fetcher] of [
+    [null, statusFetch(200)],
+    ["git@gitlab.com:a/b.git", statusFetch(200)],
+    ["git@github.com:a/b.git", statusFetch(404)],
+    ["git@github.com:a/b.git", fakeFetch(Buffer.from("<html>"), "text/html")],
+  ] as const) {
+    const dir = await repo({});
+    let now = 0;
+    let remotes = 0;
+    const r = createProjectIconResolver({ fetch: fetcher.fetch, readRemote: async () => (remotes++, remote), now: () => now });
+    assert.deepEqual(await r.resolve(dir), { icon: null, retry: false });
+    now += ICON_CACHE_MS - 1;
+    await r.resolve(dir);
+    assert.equal(remotes, 1, String(remote));
+  }
+});
+
+test("a timeout, network error, 5xx or rate limit is retried after a few minutes, not a day", async () => {
+  const offline = fakeFetch(null);
+  const slow = (_url: string, init?: { signal?: AbortSignal }) =>
+    new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+  for (const fetch of [statusFetch(500).fetch, statusFetch(503).fetch, statusFetch(429).fetch, offline.fetch, slow]) {
+    const dir = await repo({});
+    let now = 0;
+    let remotes = 0;
+    const r = createProjectIconResolver({ fetch, readRemote: async () => (remotes++, "git@github.com:a/b.git"), now: () => now, timeoutMs: 20 });
+    assert.deepEqual(await r.resolve(dir), { icon: null, retry: true });
+    now += TRANSIENT_CACHE_MS - 1;
+    await r.resolve(dir);
+    assert.equal(remotes, 1);
+    now += 2;
+    await r.resolve(dir);
+    assert.equal(remotes, 2);
+  }
+  assert.ok(TRANSIENT_CACHE_MS <= 5 * 60 * 1000);
+});
+
+test("a git error reading the remote, or a root Paseo does not list, is marked for retry", async () => {
+  const dir = await repo({});
+  const failing = createProjectIconResolver({ readRemote: async () => { throw new Error("timeout"); } });
+  assert.deepEqual(await failing.resolve(dir), { icon: null, retry: true });
+  const r = createProjectIconResolver({ readRemote: async () => null });
+  assert.deepEqual(await r.resolve(dir, { isKnownRoot: async () => false }), { icon: null, retry: true });
+});
+
+test("the RPC output may say to ask again soon", () => {
+  assert.deepEqual(projectIcon.output.parse({ icon: null, retry: true }), { icon: null, retry: true });
+});
+
 // ---- only Paseo's own project roots, and nothing outside them ----------------------------------------
 
 test("readRepoIcon refuses an icon that is a symlink, or sits in a symlinked directory, pointing out of the repo", async () => {
@@ -295,6 +368,20 @@ test("repoIconRoots asks once per project root for what is on show and not cache
   assert.deepEqual(repoIconRoots(cards, cache, new Set(["/r2"]), 200), ["/r1"]);
   // A cached answer is asked again after a day.
   assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + 24 * 60 * 60 * 1000 + 1), ["/r3"]);
+});
+
+test("repoIconRoots asks again after a minute when the last answer failed or said to retry", () => {
+  const cache = new Map([["/r3", { url: null, at: 100, ttl: REPO_ICON_RETRY_MS }]]);
+  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + REPO_ICON_RETRY_MS), []);
+  assert.deepEqual(repoIconRoots([ws("e", "/r3")], cache, new Set(), 100 + REPO_ICON_RETRY_MS + 1), ["/r3"]);
+  assert.equal(REPO_ICON_RETRY_MS, 60_000);
+});
+
+test("repoIconTtl keeps an answer a day, and a failure or a retry answer a minute", () => {
+  assert.equal(repoIconTtl({ icon: null }), REPO_ICON_TTL_MS);
+  assert.equal(repoIconTtl({ icon: { mimeType: "image/png", dataBase64: "iVBO" } }), REPO_ICON_TTL_MS);
+  assert.equal(repoIconTtl({ icon: null, retry: true }), REPO_ICON_RETRY_MS);
+  assert.equal(repoIconTtl(null), REPO_ICON_RETRY_MS);
 });
 
 test("the Repo icons setting is on by default", () => {

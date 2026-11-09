@@ -11,8 +11,10 @@ export interface RepoIcon {
 
 /** Icon files are refused above this, and so are avatars. */
 export const MAX_REPO_ICON_BYTES = 64 * 1024;
-/** How long an answer (including "none") is kept, per project root and per GitHub owner. */
+/** How long an answer (including a definite "none") is kept, per project root and per GitHub owner. */
 export const ICON_CACHE_MS = 24 * 60 * 60 * 1000;
+/** How long a "none" from a passing failure (timeout, network, GitHub 5xx or rate limit) is kept. */
+export const TRANSIENT_CACHE_MS = 5 * 60 * 1000;
 export const AVATAR_TIMEOUT_MS = 3000;
 /** Project roots kept in memory; the least recently asked goes first. */
 export const MAX_CACHED_ROOTS = 200;
@@ -251,26 +253,39 @@ export function readOriginRemote(root: string): Promise<string | null> {
 type Fetch = (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 const AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
-async function fetchAvatar(owner: string, fetch: Fetch, timeoutMs: number): Promise<RepoIcon | null> {
+/** An icon, or none; `retry` when "none" may be a passing failure (a timeout, the network, GitHub's 5xx or rate limit). */
+export interface IconAnswer {
+  icon: RepoIcon | null;
+  retry: boolean;
+}
+
+const NONE: IconAnswer = { icon: null, retry: false };
+const TRY_LATER: IconAnswer = { icon: null, retry: true };
+
+async function fetchAvatar(owner: string, fetch: Fetch, timeoutMs: number): Promise<IconAnswer> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     // No token: the public avatar of the account, which redirects to avatars.githubusercontent.com.
     const response = await fetch(`https://github.com/${owner}.png?size=64`, { signal: controller.signal });
+    // A 404 (no such account) or a 4xx other than a rate limit is definite; the rest may pass.
+    if (!response.ok) return response.status >= 500 || response.status === 429 || response.status === 408 ? TRY_LATER : NONE;
     const type = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() ?? "";
-    if (!response.ok || !AVATAR_TYPES.has(type)) return null;
+    if (!AVATAR_TYPES.has(type)) return NONE;
     const bytes = Buffer.from(await response.arrayBuffer());
-    if (!bytes.length || bytes.length > MAX_REPO_ICON_BYTES) return null;
-    return { mimeType: type as RepoIcon["mimeType"], dataBase64: bytes.toString("base64") };
+    if (!bytes.length || bytes.length > MAX_REPO_ICON_BYTES) return NONE;
+    return { icon: { mimeType: type as RepoIcon["mimeType"], dataBase64: bytes.toString("base64") }, retry: false };
   } catch {
-    return null;
+    return TRY_LATER;
   } finally {
     clearTimeout(timer);
   }
 }
 
 export interface ProjectIconResolver {
-  /** Null, without looking, for a root `isKnownRoot` does not vouch for (Paseo's own projects and workspaces). */
+  /** The icon and whether "none" is worth asking again soon. A root `isKnownRoot` does not vouch for gets none, to retry. */
+  resolve(root: string, options?: { isKnownRoot?: (root: string) => Promise<boolean> }): Promise<IconAnswer>;
+  /** The icon alone. */
   get(root: string, options?: { isKnownRoot?: (root: string) => Promise<boolean> }): Promise<RepoIcon | null>;
 }
 
@@ -290,42 +305,56 @@ export function createProjectIconResolver(options: {
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? AVATAR_TIMEOUT_MS;
   const maxRoots = options.maxRoots ?? MAX_CACHED_ROOTS;
-  const roots = new Map<string, { at: number; value: Promise<RepoIcon | null> }>();
-  const owners = new Map<string, { at: number; value: Promise<RepoIcon | null> }>();
+  type Entry = { at: number; ttl: number; value: Promise<IconAnswer> };
+  const roots = new Map<string, Entry>();
+  const owners = new Map<string, Entry>();
 
-  function cached(map: Map<string, { at: number; value: Promise<RepoIcon | null> }>, key: string, load: () => Promise<RepoIcon | null>, max = Infinity) {
+  function cached(map: Map<string, Entry>, key: string, load: () => Promise<IconAnswer>, max = Infinity): Promise<IconAnswer> {
     const hit = map.get(key);
-    if (hit && now() - hit.at <= ICON_CACHE_MS) {
+    if (hit && now() - hit.at <= hit.ttl) {
       // Most recently asked last, so the first key is the one to drop.
       map.delete(key);
       map.set(key, hit);
       return hit.value;
     }
-    const value = load().catch(() => null);
+    const entry: Entry = { at: now(), ttl: ICON_CACHE_MS, value: Promise.resolve(TRY_LATER) };
+    entry.value = load()
+      .catch(() => TRY_LATER)
+      .then((answer) => {
+        // A passing failure is kept only briefly.
+        if (answer.retry) entry.ttl = TRANSIENT_CACHE_MS;
+        return answer;
+      });
     map.delete(key);
-    map.set(key, { at: now(), value });
+    map.set(key, entry);
     while (map.size > max) map.delete(map.keys().next().value as string);
-    return value;
+    return entry.value;
   }
 
-  async function lookup(root: string): Promise<RepoIcon | null> {
+  async function lookup(root: string): Promise<IconAnswer> {
     const own = await readRepoIcon(root);
-    if (own) return own;
+    if (own) return { icon: own, retry: false };
     let remote: string | null = null;
     try {
       remote = await readRemote(root);
     } catch {
-      return null;
+      return TRY_LATER;
     }
     const owner = githubOwnerFromRemote(remote);
-    return owner ? cached(owners, owner.toLowerCase(), () => fetchAvatar(owner, fetch, timeoutMs)) : null;
+    return owner ? cached(owners, owner.toLowerCase(), () => fetchAvatar(owner, fetch, timeoutMs)) : NONE;
+  }
+
+  async function resolve(root: string, { isKnownRoot }: { isKnownRoot?: (root: string) => Promise<boolean> } = {}): Promise<IconAnswer> {
+    if (typeof root !== "string" || !isAbsolute(root)) return NONE;
+    // Not listed yet (a project added a moment ago, say): nothing is read or cached, and the client asks again.
+    if (isKnownRoot && !(await isKnownRoot(root).catch(() => false))) return TRY_LATER;
+    return cached(roots, root, () => lookup(root), maxRoots);
   }
 
   return {
-    async get(root, { isKnownRoot } = {}) {
-      if (typeof root !== "string" || !isAbsolute(root)) return null;
-      if (isKnownRoot && !(await isKnownRoot(root).catch(() => false))) return null;
-      return cached(roots, root, () => lookup(root), maxRoots);
+    resolve,
+    async get(root, options) {
+      return (await resolve(root, options)).icon;
     },
   };
 }
