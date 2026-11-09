@@ -1052,10 +1052,10 @@ function createSwitcher(installs: Installation[]): Switcher {
       terminalLists.set(key, []);
       return Promise.resolve(settle(true));
     }
-    const mine = generation;
+    // Terminals do not depend on the background setting, so a setting change (a generation bump) keeps this answer.
     const promise: Promise<boolean> = withTimeout(api.terminals.list({ workspaceId }))
       .then((result) => {
-        if (mine !== generation) return false;
+        if (disposed) return false;
         const list: TerminalInfo[] = [];
         for (const t of result.entries) {
           if (archiving.has(`terminal:${t.id}`)) continue;
@@ -1065,6 +1065,7 @@ function createSwitcher(installs: Installation[]): Switcher {
         return settle(true);
       })
       .catch((error) => {
+        if (disposed) return false;
         // A host too old for workspace terminals has none to list.
         if (!isTerminalsUnsupported(error)) return settle(false);
         terminalLists.set(key, []);

@@ -673,6 +673,25 @@ test("when the terminal list fails otherwise and there are no chats, the list sa
   }
 });
 
+test("a terminal list that lands after the background setting changed still settles the session list", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((ok) => (release = ok));
+  const { page, switcher } = await openWithChats([], ["t1"], { terminalGate: () => held });
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    switcher.setIncludeBackground(false);
+    release();
+    await tick(30);
+    const texts = page.texts();
+    assert.ok(texts.includes("shell t1"), texts.slice(-12).join("|"));
+    assert.ok(texts.includes("1 session"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
 test("an idle chat now needs a second ⌫ too, with the archive hint", async () => {
   const { page, archived, switcher } = await openWithChats(["c1", "c2"]);
   try {
