@@ -8,6 +8,7 @@ import {
   archiveError,
   canDrillInto,
   chatArchiveNeedsConfirm,
+  clickArchiveAction,
   chatCountLabel,
   chatListState,
   chatFacts,
@@ -495,6 +496,8 @@ function createSwitcher(installs: Installation[]): Switcher {
   let armed: string | null = null;
   let armTimer: any = null;
   let armedAt = 0;
+  /** When the last archive began, for the × double-click guard. */
+  let archivedAt = -Infinity;
   /** A ⌫ keyup has come since the row was armed (set by a click, which has no keypress to release). */
   let armedReleased = false;
   /** A short message in the hint line (a failed archive), until it times out. */
@@ -1363,6 +1366,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     const api = apiFor(serverId);
     if (!api) return showNotice(archiveError("that host is not reachable"));
     holdEnds();
+    archivedAt = Date.now();
     archiving.add(card.key);
     const data = dataOf(serverId);
     const info = data.workspaces?.get(workspaceId);
@@ -1399,6 +1403,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     const api = apiFor(serverId);
     if (!api) return showNotice(archiveError("that host is not reachable"));
     holdEnds();
+    archivedAt = Date.now();
     archiving.add(rowKey);
     const data = dataOf(serverId);
     if (data.agents) data.agents = { ...data.agents, list: data.agents.list.filter((a) => a.id !== chat.id) };
@@ -1424,7 +1429,10 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (!drill || !chat) return;
     drill.index = at;
     const rowKey = chatArmKey(chat.id);
-    if (chatArchiveNeedsConfirm(chat) && armed !== rowKey) {
+    const isArmed = armed === rowKey;
+    const todo = clickArchiveAction({ busy: chatArchiveNeedsConfirm(chat), armed: isArmed, armedForMs: isArmed ? Date.now() - armedAt : Infinity, sinceArchiveMs: Date.now() - archivedAt });
+    if (todo === "ignore") return;
+    if (todo === "arm") {
       setArmed(rowKey);
       // Armed by a click: no ⌫ was pressed, so none needs releasing.
       armedReleased = true;

@@ -4,6 +4,7 @@ import {
   UNTITLED_CHAT,
   agentStateBucket,
   archiveError,
+  clickArchiveAction,
   canDrillInto,
   chatArchiveNeedsConfirm,
   chatCountLabel,
@@ -276,6 +277,20 @@ test("the archiving ⌫ needs a ⌫ keyup since the arming one, whatever the tim
   assert.deepEqual(press("Backspace", { released: false }), { type: "arm" });
   assert.deepEqual(press("Backspace", { drilled: true, released: false }), { type: "archive" });
   assert.deepEqual(press("Backspace", { screen: true, released: false }), { type: "hide" });
+});
+
+test("the hover × arms a busy chat, honours the 250 ms guards, and archives an idle chat at once", () => {
+  const x = (over: Partial<Parameters<typeof clickArchiveAction>[0]> = {}) =>
+    clickArchiveAction({ busy: false, armed: false, armedForMs: Infinity, sinceArchiveMs: Infinity, ...over });
+  assert.equal(x(), "archive");
+  assert.equal(x({ busy: true }), "arm");
+  assert.equal(x({ busy: true, armed: true, armedForMs: 249 }), "ignore");
+  assert.equal(x({ busy: true, armed: true, armedForMs: 250 }), "archive");
+  // A double-click must not reach the row that moved under the pointer.
+  assert.equal(x({ sinceArchiveMs: 0 }), "ignore");
+  assert.equal(x({ sinceArchiveMs: 249 }), "ignore");
+  assert.equal(x({ sinceArchiveMs: 250 }), "archive");
+  assert.equal(x({ busy: true, sinceArchiveMs: 100 }), "ignore");
 });
 
 test("printable keys type into the filter of the level on show", () => {

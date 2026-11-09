@@ -1000,6 +1000,18 @@ export function nextArmed(current: string | null, selected: string | null, actio
   return action.type === "arm" ? selected : null;
 }
 
+/**
+ * What a click on a chat's hover × does. A busy chat is armed first; the second click needs the same
+ * 250 ms as ⌫, and no × click counts within 250 ms of an archive, so a double-click cannot reach the row
+ * that moved up under the pointer.
+ */
+export function clickArchiveAction(s: { busy: boolean; armed: boolean; armedForMs: number; sinceArchiveMs: number }): "arm" | "archive" | "ignore" {
+  if (s.sinceArchiveMs < ARM_GUARD_MS) return "ignore";
+  if (!s.busy) return "archive";
+  if (!s.armed) return "arm";
+  return s.armedForMs < ARM_GUARD_MS ? "ignore" : "archive";
+}
+
 /** How long an armed row waits for its second ⌫, and how long a failure shows in the hint line. */
 export const ARM_MS = 4000;
 /** A second ⌫ sooner than this after arming is ignored: it is a bounce or a repeat, not a decision. */
