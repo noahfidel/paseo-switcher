@@ -49,6 +49,7 @@ import {
   parsePluginScreenUrl,
   pluginScreenUrl,
   pluginScreenKey,
+  workspaceKey,
   isPluginScreenKey,
   keyServerId,
   prettifyPluginId,
@@ -63,9 +64,11 @@ import {
   migrateHidden,
   clampIndex,
   pruneScreens,
-  trackScreenVisit,
-  SCREEN_DWELL_MS,
-  type PendingScreenVisit,
+  countsScreenVisit,
+  chatOpensApi,
+  applyChatOpens,
+  rememberAgentAt,
+  type ChatOpenState,
   carriedLists,
   loadedWorkspaces,
   parseKnownNames,
@@ -813,32 +816,95 @@ test("a hidden screen keeps its title in the store even with no visits, so Setti
   assert.deepEqual(Object.keys(pruneScreens(screens, visits)), []);
 });
 
-test("a screen left in under a second records no visit; one left after a second does, at the time it was opened", () => {
-  const k = pluginScreenKey(S, "paseo-bots", "bots");
-  const t0 = 1_000_000;
-  // Opened, then left (route is a workspace) 400 ms later: nothing recorded.
-  let step = trackScreenVisit(null, k, t0);
-  assert.equal(step.record, null);
-  step = trackScreenVisit(step.pending, k, t0 + 400);
-  assert.equal(step.record, null);
-  step = trackScreenVisit(step.pending, null, t0 + 500);
-  assert.equal(step.record, null);
-  assert.equal(step.pending, null);
-  // Opened and still there after the dwell: recorded once, at the open time.
-  let kept: PendingScreenVisit | null = null;
-  step = trackScreenVisit(kept, k, t0);
-  step = trackScreenVisit(step.pending, k, t0 + SCREEN_DWELL_MS - 1);
-  assert.equal(step.record, null);
-  step = trackScreenVisit(step.pending, k, t0 + SCREEN_DWELL_MS);
-  assert.deepEqual(step.record, { key: k, at: t0 });
-  step = trackScreenVisit(step.pending, k, t0 + SCREEN_DWELL_MS + 300);
-  assert.equal(step.record, null);
-  // Moving straight to another screen restarts the clock.
-  const other = pluginScreenKey(S, "flowly", "board");
-  step = trackScreenVisit(step.pending, other, t0 + 5000);
-  assert.equal(step.record, null);
-  assert.deepEqual(step.pending, { key: other, since: t0 + 5000, recorded: false });
-  assert.equal(SCREEN_DWELL_MS, 1000);
+test("a plugin screen counts the moment it opens, except hidden ones and paseo-bots pass-through screens", () => {
+  const bots = { pluginId: "paseo-bots", screenId: "bots" };
+  const opening = { pluginId: "paseo-bots", screenId: "opening-chat" };
+  const board = { pluginId: "flowly", screenId: "opening-chat" };
+  const key = (r: { pluginId: string; screenId: string }) => pluginScreenKey(S, r.pluginId, r.screenId);
+  const passThrough = ["opening-chat"];
+  assert.equal(countsScreenVisit(bots, key(bots), [], passThrough), true);
+  assert.equal(countsScreenVisit(opening, key(opening), [], passThrough), false);
+  // Only paseo-bots' own screens are pass-through, whatever another plugin names its screens.
+  assert.equal(countsScreenVisit(board, key(board), [], passThrough), true);
+  // Without the paseo-bots API, nothing is skipped.
+  assert.equal(countsScreenVisit(opening, key(opening), [], null), true);
+  // Hidden screens never count.
+  assert.equal(countsScreenVisit(bots, key(bots), [key(bots)], passThrough), false);
+});
+
+test("chatOpensApi takes only paseo-bots' version 1 chat-opens API", () => {
+  const api = { version: 1, recent: () => [], subscribe: () => () => {}, passThroughScreens: ["x"] };
+  assert.equal(chatOpensApi(api), api);
+  assert.equal(chatOpensApi({ ...api, version: 2 }), null);
+  assert.equal(chatOpensApi({ ...api, recent: undefined }), null);
+  assert.equal(chatOpensApi({ ...api, subscribe: 3 }), null);
+  assert.equal(chatOpensApi(undefined), null);
+  assert.equal(chatOpensApi(null), null);
+});
+
+test("rememberAgentAt keeps a newer remembered tab and replaces an older one", () => {
+  const memory: AgentMemory = { "s:w1": { agentId: "a1", at: 500 } };
+  assert.equal(rememberAgentAt(memory, "s:w1", "a2", 400), memory);
+  assert.equal(rememberAgentAt(memory, "s:w1", "a1", 500), memory);
+  assert.deepEqual(rememberAgentAt(memory, "s:w1", "a2", 600), { "s:w1": { agentId: "a2", at: 600 } });
+  assert.deepEqual(rememberAgentAt(memory, "s:w2", "b", 1), { "s:w1": { agentId: "a1", at: 500 }, "s:w2": { agentId: "b", at: 1 } });
+  // The same chat opened again soon after is stamped with the new time (no refresh throttle), so it beats a message in between.
+  assert.deepEqual(rememberAgentAt(memory, "s:w1", "a1", 510), { "s:w1": { agentId: "a1", at: 510 } });
+});
+
+test("a chat open records a visit to its workspace and makes the chat the remembered tab", () => {
+  const empty: ChatOpenState = { visits: {}, memory: {} };
+  const open = { serverId: S, workspaceId: "w1", agentId: "bot-chat", at: 1000 };
+  const next = applyChatOpens(empty, [open], []);
+  assert.deepEqual(next.visits, { [workspaceKey(S, "w1")]: 1000 });
+  assert.deepEqual(next.memory, { [workspaceKey(S, "w1")]: { agentId: "bot-chat", at: 1000 } });
+  // The host is part of the key: the same workspace ID on another host is another workspace.
+  const other = applyChatOpens(next, [{ ...open, serverId: "srv_b", at: 2000 }], []);
+  assert.equal(other.visits[workspaceKey(S, "w1")], 1000);
+  assert.equal(other.visits[workspaceKey("srv_b", "w1")], 2000);
+});
+
+test("folding chat opens in is idempotent and never moves a visit or remembered tab back", () => {
+  const k = workspaceKey(S, "w1");
+  const opens = [
+    { serverId: S, workspaceId: "w1", agentId: "new", at: 3000 },
+    { serverId: S, workspaceId: "w1", agentId: "old", at: 1000 },
+  ];
+  const once = applyChatOpens({ visits: {}, memory: {} }, opens, []);
+  assert.deepEqual(once.visits, { [k]: 3000 });
+  assert.deepEqual(once.memory[k], { agentId: "new", at: 3000 });
+  const twice = applyChatOpens(once, opens, []);
+  assert.equal(twice.visits, once.visits);
+  assert.equal(twice.memory, once.memory);
+  // A later visit or focused tab already recorded is kept.
+  const later: ChatOpenState = { visits: { [k]: 5000 }, memory: { [k]: { agentId: "tab", at: 5000 } } };
+  const kept = applyChatOpens(later, opens, []);
+  assert.equal(kept.visits, later.visits);
+  assert.equal(kept.memory, later.memory);
+});
+
+test("chat opens record nothing for hidden workspaces or malformed entries", () => {
+  const k = workspaceKey(S, "w1");
+  const state: ChatOpenState = { visits: {}, memory: {} };
+  const open = { serverId: S, workspaceId: "w1", agentId: "a", at: 1000 };
+  const hidden = applyChatOpens(state, [open], [k]);
+  assert.equal(hidden.visits, state.visits);
+  assert.equal(hidden.memory, state.memory);
+  const junk = applyChatOpens(state, [null, 3, { ...open, at: "soon" }, { ...open, agentId: "" }, { ...open, workspaceId: 1 }, { ...open, at: Number.NaN }], []);
+  assert.equal(junk.visits, state.visits);
+  assert.equal(junk.memory, state.memory);
+});
+
+test("a chat opened after your last message there is the tab agentToOpen lands on; one opened before is not", () => {
+  const agents: AgentInfo[] = [
+    { id: "bot-chat", workspaceId: "w1", activityAt: 100, lastUserMessageAt: 200 },
+    { id: "messaged", workspaceId: "w1", activityAt: 300, lastUserMessageAt: 500 },
+  ];
+  const k = workspaceKey(S, "w1");
+  const newer = applyChatOpens({ visits: {}, memory: {} }, [{ serverId: S, workspaceId: "w1", agentId: "bot-chat", at: 600 }], []);
+  assert.equal(agentToOpen("w1", newer.memory[k], agents), "bot-chat");
+  const older = applyChatOpens({ visits: {}, memory: {} }, [{ serverId: S, workspaceId: "w1", agentId: "bot-chat", at: 400 }], []);
+  assert.equal(agentToOpen("w1", older.memory[k], agents), "messaged");
 });
 
 const FACTS_NOW = 1_700_000_000_000;

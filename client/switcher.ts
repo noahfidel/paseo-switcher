@@ -66,8 +66,10 @@ import {
   migrateHidden,
   clampIndex,
   setHidden,
-  trackScreenVisit,
-  type PendingScreenVisit,
+  countsScreenVisit,
+  chatOpensApi,
+  applyChatOpens,
+  type ChatOpensApi,
   pluginScreenKey,
   pluginScreenUrl,
   prettifyPluginId,
@@ -427,8 +429,8 @@ function createSwitcher(installs: Installation[]): Switcher {
   } catch {
     // Storage can be unavailable; the migration runs again next time.
   }
-  /** The plugin screen on show and how long it has been open; it counts as a visit after SCREEN_DWELL_MS. */
-  let pendingScreen: PendingScreenVisit | null = null;
+  /** The plugin screen on show, and whether opening it counted as a visit (not hidden, not pass-through). */
+  let shownScreen: { key: string; counted: boolean } | null = null;
   /** Visited keys (workspaces, and plugin screens when included), most recent first; derived from `visits`. */
   let mru: string[] = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
   /** Count a message you sent in a workspace as a visit to it. */
@@ -702,18 +704,21 @@ function createSwitcher(installs: Installation[]): Switcher {
   function syncRoute() {
     const screen = currentScreen();
     const key = currentStopKey();
-    // A plugin screen counts as a visit only once it has stayed open a moment, and never while hidden.
+    // A plugin screen counts as a visit the moment it opens, unless it is hidden or a paseo-bots pass-through screen.
+    if (!screen || !key) shownScreen = null;
+    else if (shownScreen?.key !== key) {
+      const counted = countsScreenVisit(screen, key, hiddenKeys, passThroughScreens());
+      shownScreen = { key, counted };
+      if (counted) setVisits(recordVisit(visits, key, Date.now()));
+    }
     const skipped = Boolean(screen && key && hiddenKeys.includes(key));
-    const tracked = trackScreenVisit(pendingScreen, screen && !skipped ? key : null, Date.now());
-    pendingScreen = tracked.pending;
-    if (tracked.record) setVisits(recordVisit(visits, tracked.record.key, tracked.record.at));
     if (!key || (key === lastKey && !screen)) return;
     if (key !== lastKey) {
       lastKey = key;
       if (!screen && !hiddenKeys.includes(key)) setVisits(recordVisit(visits, key, Date.now()));
     }
     // Keep the title and params of a recorded screen current; a hidden one only while it is still stored.
-    if (screen && key && (pendingScreen?.recorded || (skipped && screens[key]))) noteScreen(key, screen);
+    if (screen && key && (shownScreen?.counted || (skipped && screens[key]))) noteScreen(key, screen);
     if (currentKey()) watchPane();
   }
 
@@ -721,6 +726,65 @@ function createSwitcher(installs: Installation[]): Switcher {
   function countMessageVisits() {
     if (!countMessages) return;
     for (const [host, data] of hostData) setVisits(mergeMessageVisits(visits, host, data.agents, hiddenKeys));
+  }
+
+  // ---- paseo-bots chat opens -----------------------------------------------------------------
+  // A chat opened on paseo-bots' Bots screen counts like focusing that chat's tab in its workspace.
+  // The API may appear after the switcher starts, or be replaced when paseo-bots re-runs, so it is
+  // looked up again when the switcher opens and on the refresh timer.
+
+  let chatOpens: ChatOpensApi | null = null;
+  let chatOpensUnsubscribe: (() => void) | null = null;
+
+  /** The paseo-bots screen IDs that never count as visits; null without paseo-bots' API. */
+  function passThroughScreens(): string[] | null {
+    const list = chatOpensApi(g.__paseoBotsChatOpens)?.passThroughScreens;
+    return Array.isArray(list) ? list : null;
+  }
+
+  function foldChatOpens(opens: readonly unknown[]) {
+    const next = applyChatOpens({ visits, memory: agentMemory }, opens, hiddenKeys);
+    if (next.memory !== agentMemory) {
+      agentMemory = next.memory;
+      writeJson(AGENTS_KEY, agentMemory);
+    }
+    setVisits(next.visits);
+  }
+
+  /** Follows paseo-bots' chat-opens API: folds in what it already recorded, then each new open. */
+  function watchChatOpens() {
+    const api = chatOpensApi(g.__paseoBotsChatOpens);
+    if (api === chatOpens) return;
+    unwatchChatOpens();
+    if (!api) return;
+    chatOpens = api;
+    try {
+      const recent = api.recent();
+      if (Array.isArray(recent)) foldChatOpens(recent);
+    } catch {
+      // A broken list: new opens still count.
+    }
+    try {
+      const unsubscribe = api.subscribe((open) => {
+        // Recorded after paseo-bots' own handler has run, so nothing is added to its navigation.
+        setTimeout(() => {
+          if (!disposed && chatOpens === api) foldChatOpens([open]);
+        }, 0);
+      });
+      chatOpensUnsubscribe = typeof unsubscribe === "function" ? unsubscribe : null;
+    } catch {
+      chatOpensUnsubscribe = null;
+    }
+  }
+
+  function unwatchChatOpens() {
+    try {
+      chatOpensUnsubscribe?.();
+    } catch {
+      // Nothing to undo.
+    }
+    chatOpensUnsubscribe = null;
+    chatOpens = null;
   }
 
   /** Remembers which agent tab is active in the current workspace. One query inside the pane. */
@@ -1213,6 +1277,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   // ---- open, move, commit ------------------------------------------------------------------------
 
   function begin(nextMode: Mode, direction: 1 | -1) {
+    watchChatOpens();
     syncRoute();
     // A tab picked in the last couple of seconds hasn't been sampled yet; catch it before leaving.
     rememberFocusedAgent();
@@ -1267,7 +1332,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     writeJson(HIDDEN_KEY, hiddenKeys);
     mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
     // A hidden screen on show stops counting as a visit from here on.
-    pendingScreen = null;
+    shownScreen = null;
     if (root) refreshCardsAndRender();
   }
 
@@ -2352,6 +2417,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   // right after a frame paints so measuring the pane never forces Paseo's pending layout early.
   const refreshTimer = setInterval(() => {
     if (currentPane() !== watched) watchPane();
+    watchChatOpens();
     if (!open && !doc.hidden && Date.now() >= quietUntil) rememberFocusedAgent();
     if (layout === "strip" && dirty && !doc.hidden && Date.now() >= quietUntil) {
       whenIdle(() => win.requestAnimationFrame(() => setTimeout(snapshotIfDirty, 0)));
@@ -2362,6 +2428,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       whenIdle(() => loadAgents(AGENTS_BACKGROUND_MS));
     }
   }, REFRESH_MS);
+  watchChatOpens();
   syncRoute();
   loadWorkspaces();
   loadAgents();
@@ -2425,7 +2492,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       writeJson(HIDDEN_KEY, hiddenKeys);
       mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
       // Visits start counting again from the screen on show.
-      pendingScreen = null;
+      shownScreen = null;
     },
     getRepoIcons: () => repoIcons,
     setRepoIcons(next) {
@@ -2464,6 +2531,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       g[CARRY_KEY] = { includeBackground, hosts, repoIcons: new Map(repoIconCache) };
       clearInterval(routeTimer);
       clearInterval(refreshTimer);
+      unwatchChatOpens();
       observer.disconnect();
       win.removeEventListener("keydown", onKeyDown, true);
       win.removeEventListener("keyup", onKeyUp, true);

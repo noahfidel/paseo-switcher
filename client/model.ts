@@ -520,28 +520,22 @@ export function clampIndex(index: number, length: number): number {
   return length <= 0 ? 0 : Math.max(0, Math.min(index, length - 1));
 }
 
-/** A plugin screen left sooner than this records no visit, so redirect screens never reach the recents. */
-export const SCREEN_DWELL_MS = 1000;
-
-export interface PendingScreenVisit {
-  key: string;
-  since: number;
-  recorded: boolean;
-}
+/** The plugin that publishes chat opens and names its pass-through screens (see ChatOpensApi). */
+export const BOTS_PLUGIN_ID = "paseo-bots";
 
 /**
- * Feed it the plugin screen key on show (null on any other page, or for a hidden screen) on every route check.
- * It reports the visit once the screen has stayed open for SCREEN_DWELL_MS, stamped with when it was opened.
+ * Whether opening this plugin screen counts as a visit: every screen does the moment it opens, except one
+ * hidden from the switcher and a paseo-bots screen it names as pass-through (one that only forwards you on,
+ * like its "Opening chat" screen). Without paseo-bots' API (`passThrough` null), nothing is skipped.
  */
-export function trackScreenVisit(
-  pending: PendingScreenVisit | null,
-  key: string | null,
-  now: number,
-): { pending: PendingScreenVisit | null; record: { key: string; at: number } | null } {
-  if (!key) return { pending: null, record: null };
-  if (!pending || pending.key !== key) return { pending: { key, since: now, recorded: false }, record: null };
-  if (pending.recorded || now - pending.since < SCREEN_DWELL_MS) return { pending, record: null };
-  return { pending: { ...pending, recorded: true }, record: { key, at: pending.since } };
+export function countsScreenVisit(
+  route: { pluginId: string; screenId: string },
+  key: string,
+  hidden: readonly string[],
+  passThrough: readonly string[] | null,
+): boolean {
+  if (hidden.includes(key)) return false;
+  return !(route.pluginId === BOTS_PLUGIN_ID && passThrough?.includes(route.screenId));
 }
 
 function screenCard(key: string, meta: ScreenMeta | undefined): Card | null {
@@ -1329,6 +1323,74 @@ export function agentToOpen(workspaceId: string, remembered: RememberedAgent | u
   if (rememberedUsable) return rememberedUsable.agentId;
   if (messaged) return messaged.id;
   return fallback?.id ?? remembered?.agentId ?? null;
+}
+
+/** A chat opened on paseo-bots' Bots screen (epoch ms). */
+export interface ChatOpen {
+  serverId: string;
+  workspaceId: string;
+  agentId: string;
+  at: number;
+}
+
+/** Optional API paseo-bots publishes on `globalThis.__paseoBotsChatOpens` (version 1) while it is installed. */
+export interface ChatOpensApi {
+  version: 1;
+  /** Most recent first, at most 20; kept across client re-runs. */
+  recent(): unknown[];
+  subscribe(listener: (open: unknown) => void): () => void;
+  /** paseo-bots screen IDs that only forward you on, and never count as visits. */
+  passThroughScreens: string[];
+}
+
+/** paseo-bots' chat-opens API, or null when it is missing or another version. */
+export function chatOpensApi(value: unknown): ChatOpensApi | null {
+  const api = value as ChatOpensApi | null | undefined;
+  if (!api || typeof api !== "object" || api.version !== 1) return null;
+  return typeof api.recent === "function" && typeof api.subscribe === "function" ? api : null;
+}
+
+function cleanChatOpen(value: unknown): ChatOpen | null {
+  const open = value as ChatOpen | null;
+  if (!open || typeof open !== "object") return null;
+  const { serverId, workspaceId, agentId, at } = open;
+  if (typeof serverId !== "string" || !serverId || typeof workspaceId !== "string" || !workspaceId) return null;
+  if (typeof agentId !== "string" || !agentId || typeof at !== "number" || !Number.isFinite(at)) return null;
+  return open;
+}
+
+/** Records `agentId` as a workspace's remembered tab as of `at`, unless the one remembered is as new or newer. */
+export function rememberAgentAt(memory: AgentMemory, key: string, agentId: string, at: number): AgentMemory {
+  const current = memory[key];
+  if (current && current.at >= at) return memory;
+  // Not `rememberAgent`: its refresh throttle would keep an older time for the same agent.
+  const next: AgentMemory = {};
+  for (const k of Object.keys(memory).slice(-(MAX_REMEMBERED_AGENTS - 1))) if (k !== key) next[k] = memory[k];
+  next[key] = { agentId, at };
+  return next;
+}
+
+export interface ChatOpenState {
+  visits: Visits;
+  memory: AgentMemory;
+}
+
+/**
+ * Counts each chat open like focusing that chat's tab: a visit to its workspace at `at`, and the chat as
+ * the workspace's remembered tab. Times only move forward, so folding the same opens in twice changes
+ * nothing. Workspaces hidden from the switcher record nothing; malformed entries are skipped.
+ */
+export function applyChatOpens(state: ChatOpenState, opens: readonly unknown[], hidden: readonly string[]): ChatOpenState {
+  let { visits, memory } = state;
+  for (const value of opens) {
+    const open = cleanChatOpen(value);
+    if (!open) continue;
+    const key = workspaceKey(open.serverId, open.workspaceId);
+    if (hidden.includes(key)) continue;
+    if (!(visits[key] >= open.at)) visits = recordVisit(visits, key, open.at);
+    memory = rememberAgentAt(memory, key, open.agentId, open.at);
+  }
+  return visits === state.visits && memory === state.memory ? state : { visits, memory };
 }
 
 /** Whether a workspace belongs in the switcher: never one being archived; background ones only when included. */

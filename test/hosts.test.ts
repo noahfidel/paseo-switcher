@@ -111,7 +111,7 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
 }
 
 function cleanGlobals() {
-  for (const key of ["document", "window", "MutationObserver", "PopStateEvent", "__paseoSwitcher", "__paseoSwitcherInstalls", "__paseoSwitcherLists", "__paseoSwitcherBuild"]) delete g[key];
+  for (const key of ["document", "window", "MutationObserver", "PopStateEvent", "__paseoSwitcher", "__paseoSwitcherInstalls", "__paseoSwitcherLists", "__paseoSwitcherBuild", "__paseoBotsChatOpens"]) delete g[key];
 }
 
 function listing(host: string, ids: string[]) {
@@ -655,6 +655,132 @@ test("a second ⌫ with no ⌫ keyup since arming is ignored however much time p
     assert.deepEqual(archived(), ["srv_b:archive:wks_b1"]);
   } finally {
     switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+// ---- paseo-bots chat opens and plugin screen visits -------------------------------------------
+
+const VISITS = "paseo-switcher:visits";
+const AGENTS = "paseo-switcher:last-agent";
+const stored = (page: { store: Map<string, string> }, key: string) => JSON.parse(page.store.get(key) ?? "{}");
+
+/** A stand-in for paseo-bots' `__paseoBotsChatOpens` API; `emit` tells the subscribers of a chat open. */
+function fakeChatOpens(recent: unknown[] = [], passThroughScreens: string[] = [], version = 1) {
+  const listeners = new Set<(open: unknown) => void>();
+  return {
+    version,
+    recent: () => recent,
+    subscribe(listener: (open: unknown) => void) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    passThroughScreens,
+    emit: (open: unknown) => {
+      for (const listener of [...listeners]) listener(open);
+    },
+    listeners: () => listeners.size,
+  };
+}
+
+test("a plugin screen is recorded as a visit the moment it opens", async () => {
+  const page = fakePage("/h/srv_a/plugin/flowly/surface/board");
+  try {
+    const before = Date.now();
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    const at = stored(page, VISITS)["plugin-screen|srv_a|flowly|board"];
+    assert.ok(typeof at === "number" && at >= before && at <= Date.now(), "recorded at once, stamped with when it opened");
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a paseo-bots pass-through screen is never recorded; other paseo-bots screens are", async () => {
+  const page = fakePage("/h/srv_a/plugin/paseo-bots/surface/opening-chat");
+  try {
+    g.__paseoBotsChatOpens = fakeChatOpens([], ["opening-chat"]);
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.deepEqual(stored(page, VISITS), {});
+    g.window.location.pathname = "/h/srv_a/plugin/paseo-bots/surface/bots";
+    switcher.open();
+    await tick();
+    assert.ok(stored(page, VISITS)["plugin-screen|srv_a|paseo-bots|bots"] > 0);
+    assert.equal(stored(page, VISITS)["plugin-screen|srv_a|paseo-bots|opening-chat"], undefined);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("chat opens paseo-bots already recorded are folded in at start, once, and new ones as they come", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_home");
+  try {
+    const opens = fakeChatOpens([
+      { serverId: "srv_b", workspaceId: "wks_2", agentId: "chat_2", at: 2000 },
+      { serverId: "srv_a", workspaceId: "wks_1", agentId: "chat_1", at: 1000 },
+    ]);
+    g.__paseoBotsChatOpens = opens;
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    const visits = stored(page, VISITS);
+    assert.equal(visits["srv_a:wks_1"], 1000);
+    assert.equal(visits["srv_b:wks_2"], 2000, "each open keeps its own host");
+    assert.deepEqual(stored(page, AGENTS)["srv_b:wks_2"], { agentId: "chat_2", at: 2000 });
+    assert.equal(opens.listeners(), 1);
+    // Opening the switcher again re-reads the same API: nothing changes and no second subscription.
+    switcher.open();
+    await tick();
+    assert.equal(opens.listeners(), 1);
+    assert.equal(stored(page, VISITS)["srv_a:wks_1"], 1000);
+    const now = Date.now() + 5000;
+    opens.emit({ serverId: "srv_a", workspaceId: "wks_1", agentId: "chat_9", at: now });
+    await tick();
+    assert.equal(stored(page, VISITS)["srv_a:wks_1"], now);
+    assert.deepEqual(stored(page, AGENTS)["srv_a:wks_1"], { agentId: "chat_9", at: now });
+    switcher.dispose();
+    assert.equal(opens.listeners(), 0, "unsubscribed when the switcher goes");
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("paseo-bots' API is picked up when it appears after the switcher started; another version is ignored", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_home");
+  try {
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    g.__paseoBotsChatOpens = fakeChatOpens([{ serverId: "srv_a", workspaceId: "wks_v2", agentId: "c", at: 500 }], [], 2);
+    switcher.open();
+    await tick();
+    assert.equal(stored(page, VISITS)["srv_a:wks_v2"], undefined, "version 2 is not this contract");
+    const late = fakeChatOpens([{ serverId: "srv_a", workspaceId: "wks_late", agentId: "c", at: 700 }]);
+    g.__paseoBotsChatOpens = late;
+    switcher.open();
+    await tick();
+    assert.equal(stored(page, VISITS)["srv_a:wks_late"], 700);
+    assert.equal(late.listeners(), 1);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a chat open in a workspace hidden from the switcher records nothing", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_home", { "paseo-switcher:hidden": JSON.stringify(["srv_a:wks_hidden"]) });
+  try {
+    const opens = fakeChatOpens([{ serverId: "srv_a", workspaceId: "wks_hidden", agentId: "c", at: 700 }]);
+    g.__paseoBotsChatOpens = opens;
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    opens.emit({ serverId: "srv_a", workspaceId: "wks_hidden", agentId: "d", at: 900 });
+    await tick();
+    assert.equal(stored(page, VISITS)["srv_a:wks_hidden"], undefined);
+    assert.equal(stored(page, AGENTS)["srv_a:wks_hidden"], undefined);
+    switcher.dispose();
+  } finally {
     cleanGlobals();
   }
 });
