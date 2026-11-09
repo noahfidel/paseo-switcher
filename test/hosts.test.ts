@@ -15,6 +15,7 @@ registerHooks({
 const { installSwitcher } = await import("../client/switcher.ts");
 
 const g = globalThis as any;
+const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function element(): any {
   const node: any = {
@@ -96,7 +97,7 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
 }
 
 function cleanGlobals() {
-  for (const key of ["document", "window", "MutationObserver", "__paseoSwitcher", "__paseoSwitcherInstalls", "__paseoSwitcherLists"]) delete g[key];
+  for (const key of ["document", "window", "MutationObserver", "__paseoSwitcher", "__paseoSwitcherInstalls", "__paseoSwitcherLists", "__paseoSwitcherBuild"]) delete g[key];
 }
 
 function listing(host: string, ids: string[]) {
@@ -128,12 +129,13 @@ function fakeApi(host: string, ids: string[], calls: string[], gate?: () => Prom
   };
 }
 
-test("one switcher handles the keys however many hosts install the plugin, until the last is disposed", () => {
+test("one switcher handles the keys however many hosts install the plugin, until the last is disposed", async () => {
   const page = fakePage("/h/srv_a/workspace/wks_1");
   try {
     const calls: string[] = [];
     const a = installSwitcher(fakeApi("srv_a", [], calls));
     const b = installSwitcher(fakeApi("srv_b", [], calls));
+    await tick();
     assert.equal(page.keydown(), 1, "two installations, one key handler");
     b.dispose();
     assert.equal(page.keydown(), 1, "the other host's installation keeps the switcher");
@@ -146,14 +148,16 @@ test("one switcher handles the keys however many hosts install the plugin, until
   }
 });
 
-test("a host's installation re-run (Paseo does this after a navigation) keeps a single handler", () => {
+test("a host's installation re-run (Paseo does this after a navigation) keeps a single handler", async () => {
   const page = fakePage("/h/srv_a/workspace/wks_1");
   try {
     const calls: string[] = [];
     const a = installSwitcher(fakeApi("srv_a", [], calls));
     const b = installSwitcher(fakeApi("srv_b", [], calls));
+    await tick();
     a.dispose();
     const a2 = installSwitcher(fakeApi("srv_a", [], calls));
+    await tick();
     assert.equal(page.keydown(), 1);
     a2.dispose();
     b.dispose();
@@ -185,8 +189,6 @@ test("every saved host's workspaces are loaded through that host's own API", asy
     cleanGlobals();
   }
 });
-
-const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("a host that answers is shown at once, even while another host has not answered", async () => {
   const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
@@ -243,6 +245,64 @@ test("a host whose request never settles is asked again after the load timeout",
     switcher.dispose();
   } finally {
     t.mock.timers.reset();
+    cleanGlobals();
+  }
+});
+
+test("a burst of installations builds one switcher, which asks each host once", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }, { serverId: "srv_c" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a1", { "@paseo:daemon-registry": registry });
+  try {
+    const calls: string[] = [];
+    const apis: Record<string, any> = {
+      srv_a: fakeApi("srv_a", ["wks_a1"], calls),
+      srv_b: fakeApi("srv_b", ["wks_b1"], calls),
+      srv_c: fakeApi("srv_c", ["wks_c1"], calls),
+    };
+    const getPaseoClient = (id: string) => apis[id];
+    const handles = ["srv_a", "srv_b", "srv_c"].map((id) => installSwitcher(apis[id], { getPaseoClient }));
+    await tick(20);
+    assert.equal(calls.filter((c) => c.endsWith(":workspaces")).length, 3);
+    assert.equal(calls.filter((c) => c.endsWith(":agents")).length, 3);
+    assert.equal(page.keydown(), 1);
+    for (const h of handles) h.dispose();
+    assert.equal(page.keydown(), 0);
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("the shortcut is known before the switcher is built", () => {
+  fakePage("/h/srv_a/workspace/wks_1", { "paseo-switcher:shortcut": JSON.stringify("ctrl-tab") });
+  try {
+    const a = installSwitcher(fakeApi("srv_a", [], []));
+    assert.equal(a.getShortcut(), "ctrl-tab");
+    a.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a switcher's loads that land after it is gone change nothing", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a1", {
+    "@paseo:daemon-registry": registry,
+    "paseo-switcher:visits": JSON.stringify({ "srv_a:wks_a1": 1 }),
+  });
+  try {
+    const calls: string[] = [];
+    let answer = () => {};
+    const gate = new Promise<void>((resolve) => (answer = resolve));
+    const api = fakeApi("srv_a", ["wks_a1"], calls, () => gate);
+    const a = installSwitcher(api, { getPaseoClient: () => api });
+    await tick();
+    assert.deepEqual(calls, ["srv_a:workspaces", "srv_a:agents"]);
+    a.dispose();
+    answer();
+    await tick(20);
+    assert.equal(page.store.get("paseo-switcher:names"), undefined, "no names written by a disposed switcher");
+    assert.equal(g.__paseoSwitcherLists?.hosts.get("srv_a")?.workspaces ?? null, null, "the carried lists are not filled in later");
+  } finally {
     cleanGlobals();
   }
 });

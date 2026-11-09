@@ -136,7 +136,7 @@ import {
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
  * - hosts: Paseo 0.15 evaluates the plugin's client once per connected host (`PluginRegistry.byHost`), each
  *          with a `paseo` API bound to that host. All of them share `globalThis.__paseoSwitcherInstalls`, and one
- *          switcher, made by the newest, handles the keys. It reads every host's workspaces and agents through
+ *          switcher handles the keys, built in a microtask so installations that run together build it once. It reads every host's workspaces and agents through
  *          the SDK's `getPaseoClient(serverId)`, so nothing loaded from one host is read as another's. The hosts
  *          to ask are those in the app's saved host list (localStorage `@paseo:daemon-registry`, an array of
  *          `{ serverId, label, … }`), the one on show, and those of visited workspaces. That key is not public
@@ -188,6 +188,8 @@ const CARRY_KEY = "__paseoSwitcherLists";
 const INSTALLS_KEY = "__paseoSwitcherInstalls";
 /** Global slot of the one switcher that handles the keys. */
 const ACTIVE_KEY = "__paseoSwitcher";
+/** Global flag: a switcher build is queued, so a burst of installations builds one. */
+const BUILD_KEY = "__paseoSwitcherBuild";
 /** A tap shorter than this switches without ever drawing the strip. */
 const SHOW_DELAY_MS = 110;
 const POLL_ROUTE_MS = 300;
@@ -313,7 +315,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   const installs: Installation[] = Array.isArray(g[INSTALLS_KEY]) ? g[INSTALLS_KEY] : (g[INSTALLS_KEY] = []);
   const mine: Installation = { paseo, options, listeners: new Set() };
   installs.push(mine);
-  createSwitcher(installs);
+  scheduleBuild();
   const active = (): Switcher => g[ACTIVE_KEY] ?? noop;
   return {
     open: () => active().open(),
@@ -321,7 +323,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     setLimit: (v) => active().setLimit(v),
     getLayout: () => active().getLayout(),
     setLayout: (v) => active().setLayout(v),
-    getShortcut: () => active().getShortcut(),
+    // Asked at install time for the Command Center title, before the switcher is built.
+    getShortcut: () => (g[ACTIVE_KEY] ? active().getShortcut() : parseShortcut(storedJson(SHORTCUT_KEY, DEFAULT_SHORTCUT))),
     setShortcut: (v) => active().setShortcut(v),
     getIncludeBackground: () => active().getIncludeBackground(),
     setIncludeBackground: (v) => active().setIncludeBackground(v),
@@ -346,6 +349,30 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       if (!installs.length) active().dispose();
     },
   };
+}
+
+/**
+ * Builds the switcher in a microtask, so the installations Paseo runs together (one per host, at startup
+ * or after a navigation) build one switcher between them, not one each.
+ */
+function scheduleBuild() {
+  if (g[BUILD_KEY]) return;
+  g[BUILD_KEY] = true;
+  void Promise.resolve().then(() => {
+    g[BUILD_KEY] = false;
+    const installs = g[INSTALLS_KEY];
+    if (!g.document || !g.window || !Array.isArray(installs) || !installs.length) return;
+    createSwitcher(installs);
+  });
+}
+
+function storedJson(key: string, fallback: any): any {
+  try {
+    const raw = g.window?.localStorage?.getItem(key);
+    return raw == null ? fallback : JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
 }
 
 function createSwitcher(installs: Installation[]): Switcher {
@@ -683,8 +710,9 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** Loads in flight, by host. */
   const loadingWorkspaces = new Map<string, Promise<boolean>>();
   const loadingAgents = new Map<string, Promise<boolean>>();
-  /** Bumped when the background setting changes, so a load that started before it is discarded. */
+  /** Bumped when the background setting changes or the switcher goes, so a load that started before is discarded. */
   let generation = 0;
+  let disposed = false;
 
   /** Reloads the workspaces of every known host whose list is older than `maxAge`, each on its own. */
   function loadWorkspaces(maxAge = 0) {
@@ -1443,6 +1471,7 @@ function createSwitcher(installs: Installation[]): Switcher {
               () => null,
             )
             .then((answer) => {
+              if (disposed) return;
               const url = repoIconUrl(answer?.icon);
               repoIconPending.delete(key);
               repoIconCache.set(key, { url, at: Date.now(), ttl: repoIconTtl(answer) });
@@ -2170,8 +2199,13 @@ function createSwitcher(installs: Installation[]): Switcher {
     },
     onShortcutChange: () => () => {},
     dispose() {
+      if (disposed) return;
+      disposed = true;
+      generation++;
       close();
-      g[CARRY_KEY] = { includeBackground, hosts: hostData, repoIcons: repoIconCache };
+      // Copies, so nothing this switcher still holds can change what the next one starts from.
+      const hosts = new Map([...hostData].map(([host, data]) => [host, { ...data }]));
+      g[CARRY_KEY] = { includeBackground, hosts, repoIcons: new Map(repoIconCache) };
       clearInterval(routeTimer);
       clearInterval(refreshTimer);
       observer.disconnect();
