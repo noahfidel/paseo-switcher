@@ -245,6 +245,10 @@ const REFRESH_MS = 2000;
  */
 const QUIET_AFTER_SWITCH_MS = 2000;
 const WORKSPACES_STALE_MS = 5000;
+/** Opening the switcher reuses a list younger than this, so a quick tap-tap asks the hosts once. */
+const OPEN_FRESH_MS = 500;
+/** While the switcher is open its lists are reloaded this often, so status marks follow Paseo's sidebar. */
+const LIVE_POLL_MS = 1500;
 /** A host's list request that has not settled by then is given up, so the host can be asked again. */
 const LOAD_TIMEOUT_MS = 10_000;
 /** While the switcher is closed, the agent list is refreshed in idle time this often (5 s), so messages count. */
@@ -858,9 +862,13 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** Terminals per workspace key, from the last load; loaded only when a workspace's sessions are listed. */
   const terminalLists = new Map<string, TerminalInfo[]>();
   const loadingTerminals = new Map<string, Promise<boolean>>();
+  /** What each host's last landed lists held, so a reload that found nothing new redraws nothing. */
+  const workspaceSigs = new Map<string, string>();
+  const agentSigs = new Map<string, string>();
   /** Bumped when the background setting changes or the switcher goes, so a load that started before is discarded. */
   let generation = 0;
   let disposed = false;
+  let livePoll: ReturnType<typeof setInterval> | null = null;
 
   /** Reloads the workspaces of every known host whose list is older than `maxAge`, each on its own. */
   function loadWorkspaces(maxAge = 0) {
@@ -916,11 +924,14 @@ function createSwitcher(installs: Installation[]): Switcher {
           });
         }
         const data = dataOf(host);
+        const sig = JSON.stringify([...next]);
+        const changed = sig !== workspaceSigs.get(host);
+        workspaceSigs.set(host, sig);
         data.workspaces = next;
         data.workspacesAt = Date.now();
         noteNames();
         // Each host's rows show as soon as its list lands; a slow host holds up no other.
-        if (root) refreshCardsAndRender();
+        if (root && changed) refreshCardsAndRender();
         return true;
       })
       .catch(() => {
@@ -1001,15 +1012,20 @@ function createSwitcher(installs: Installation[]): Switcher {
         }
         // One page of the host's most recently changed agents; Paseo cannot list one workspace's.
         const data = dataOf(host);
-        data.agents = { list, capped: Boolean(result.pageInfo?.hasMore) };
+        const capped = Boolean(result.pageInfo?.hasMore);
+        const sig = JSON.stringify([list, capped]);
+        const drilled = drill && splitKey(drill.key).serverId === host;
+        // A list that landed after a failed one must draw even if it matches the one before that.
+        const changed = sig !== agentSigs.get(host) || Boolean(drilled && drill?.failed);
+        agentSigs.set(host, sig);
+        data.agents = { list, capped };
         data.agentsAt = Date.now();
         const before = visits;
         countMessageVisits();
-        const drilled = drill && splitKey(drill.key).serverId === host;
         if (drilled && drill) drill.failed = false;
-        if (root && drilled) refreshSessions();
+        if (root && drilled && changed) refreshSessions();
         if (root && visits !== before) refreshCardsAndRender();
-        else if (root && drilled) render();
+        else if (root && drilled && changed) render();
         return true;
       })
       .catch(() => {
@@ -1388,8 +1404,27 @@ function createSwitcher(installs: Installation[]): Switcher {
     hostNames = hostLabels();
     fillScreenIcons();
     render();
-    loadAgents(WORKSPACES_STALE_MS);
-    loadWorkspaces(WORKSPACES_STALE_MS);
+    // Drawn from the cache first so opening is instant; the lists are then asked for fresh.
+    loadAgents(OPEN_FRESH_MS);
+    loadWorkspaces(OPEN_FRESH_MS);
+    startLivePoll();
+  }
+
+  /** While the switcher is open and visible, its lists are reloaded so status marks keep up. */
+  function startLivePoll() {
+    if (livePoll !== null) return;
+    livePoll = setInterval(() => {
+      if (!open || disposed || doc.hidden) return;
+      // Loads already in flight are reused, so a slow host is never asked twice at once.
+      loadAgents();
+      loadWorkspaces();
+    }, LIVE_POLL_MS);
+  }
+
+  function stopLivePoll() {
+    if (livePoll === null) return;
+    clearInterval(livePoll);
+    livePoll = null;
   }
 
   /** Rebuilds the open list after new data landed, keeping the selected card if it is still there. */
@@ -1652,7 +1687,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     refreshSessions();
     clearTimeout(showTimer);
     render();
-    if (!agentsOf(card.serverId) || agentsStale(card.serverId, WORKSPACES_STALE_MS)) void loadHostAgents(card.serverId);
+    if (!agentsOf(card.serverId) || agentsStale(card.serverId, OPEN_FRESH_MS)) void loadHostAgents(card.serverId);
     // Terminals are cheap to list and have no change feed here, so they are asked for on every drill-in.
     void loadTerminals(card.key);
   }
@@ -1715,6 +1750,7 @@ function createSwitcher(installs: Installation[]): Switcher {
 
   function close() {
     open = false;
+    stopLivePoll();
     query = "";
     drill = null;
     setArmed(null);
@@ -2615,6 +2651,8 @@ function createSwitcher(installs: Installation[]): Switcher {
       generation++;
       loadingWorkspaces.clear();
       loadingAgents.clear();
+      workspaceSigs.clear();
+      agentSigs.clear();
       for (const data of hostData.values()) {
         data.workspacesAt = 0;
         data.agentsAt = 0;
