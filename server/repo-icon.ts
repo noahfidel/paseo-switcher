@@ -1,8 +1,8 @@
 // Finds a repository's icon on the daemon machine: an icon file in the repo, else the avatar of the
 // GitHub account that owns its `origin` remote. Never throws; every failure is "no icon".
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { extname, isAbsolute, join } from "node:path";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { extname, isAbsolute, join, relative } from "node:path";
 
 export interface RepoIcon {
   mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/svg+xml" | "image/x-icon";
@@ -14,6 +14,8 @@ export const MAX_REPO_ICON_BYTES = 64 * 1024;
 /** How long an answer (including "none") is kept, per project root and per GitHub owner. */
 export const ICON_CACHE_MS = 24 * 60 * 60 * 1000;
 export const AVATAR_TIMEOUT_MS = 3000;
+/** Project roots kept in memory; the least recently asked goes first. */
+export const MAX_CACHED_ROOTS = 200;
 
 /*
  * The same search Paseo 0.15 runs for its own sidebar project icons (`getProjectIcon` in the daemon):
@@ -194,11 +196,22 @@ function jpegSize(bytes: Buffer): [number, number] | null {
   return null;
 }
 
-/** Reads the repo's icon file: square, at most MAX_REPO_ICON_BYTES, with an ICO turned into its PNG frame. */
+/** `path` is `root` or below it. Both are real paths. */
+function isInside(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * Reads the repo's icon file: square, at most MAX_REPO_ICON_BYTES, with an ICO turned into its PNG frame.
+ * The file's real path must stay inside the repo's, so a symlink cannot lead the read anywhere else.
+ */
 export async function readRepoIcon(root: string): Promise<RepoIcon | null> {
   try {
-    const path = await findRepoIcon(root);
-    if (!path || (await stat(path)).size > MAX_REPO_ICON_BYTES) return null;
+    const found = await findRepoIcon(root);
+    if (!found) return null;
+    const [realRoot, path] = await Promise.all([realpath(root), realpath(found)]);
+    if (!isInside(realRoot, path) || (await stat(path)).size > MAX_REPO_ICON_BYTES) return null;
     let bytes: Buffer = await readFile(path);
     let type = sniff(bytes, path);
     if (type === "image/x-icon") {
@@ -257,31 +270,41 @@ async function fetchAvatar(owner: string, fetch: Fetch, timeoutMs: number): Prom
 }
 
 export interface ProjectIconResolver {
-  get(root: string): Promise<RepoIcon | null>;
+  /** Null, without looking, for a root `isKnownRoot` does not vouch for (Paseo's own projects and workspaces). */
+  get(root: string, options?: { isKnownRoot?: (root: string) => Promise<boolean> }): Promise<RepoIcon | null>;
 }
 
 /**
  * Icons per project root and avatars per GitHub owner, each kept in memory for ICON_CACHE_MS (answers of
- * "none" too), with one lookup in flight per root and per owner.
+ * "none" too), with one lookup in flight per root and per owner. At most `maxRoots` roots are kept.
  */
 export function createProjectIconResolver(options: {
   fetch?: Fetch;
   readRemote?: (root: string) => Promise<string | null>;
   now?: () => number;
   timeoutMs?: number;
+  maxRoots?: number;
 } = {}): ProjectIconResolver {
   const fetch = options.fetch ?? ((url, init) => globalThis.fetch(url, init));
   const readRemote = options.readRemote ?? readOriginRemote;
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? AVATAR_TIMEOUT_MS;
+  const maxRoots = options.maxRoots ?? MAX_CACHED_ROOTS;
   const roots = new Map<string, { at: number; value: Promise<RepoIcon | null> }>();
   const owners = new Map<string, { at: number; value: Promise<RepoIcon | null> }>();
 
-  function cached(map: Map<string, { at: number; value: Promise<RepoIcon | null> }>, key: string, load: () => Promise<RepoIcon | null>) {
+  function cached(map: Map<string, { at: number; value: Promise<RepoIcon | null> }>, key: string, load: () => Promise<RepoIcon | null>, max = Infinity) {
     const hit = map.get(key);
-    if (hit && now() - hit.at <= ICON_CACHE_MS) return hit.value;
+    if (hit && now() - hit.at <= ICON_CACHE_MS) {
+      // Most recently asked last, so the first key is the one to drop.
+      map.delete(key);
+      map.set(key, hit);
+      return hit.value;
+    }
     const value = load().catch(() => null);
+    map.delete(key);
     map.set(key, { at: now(), value });
+    while (map.size > max) map.delete(map.keys().next().value as string);
     return value;
   }
 
@@ -299,9 +322,10 @@ export function createProjectIconResolver(options: {
   }
 
   return {
-    get(root) {
-      if (typeof root !== "string" || !isAbsolute(root)) return Promise.resolve(null);
-      return cached(roots, root, () => lookup(root));
+    async get(root, { isKnownRoot } = {}) {
+      if (typeof root !== "string" || !isAbsolute(root)) return null;
+      if (isKnownRoot && !(await isKnownRoot(root).catch(() => false))) return null;
+      return cached(roots, root, () => lookup(root), maxRoots);
     },
   };
 }

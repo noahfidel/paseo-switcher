@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { createKnownRoots, paseoRoots } from "../server/known-roots.ts";
 import {
   ICON_PATTERNS,
+  MAX_CACHED_ROOTS,
   MAX_REPO_ICON_BYTES,
   createProjectIconResolver,
   findRepoIcon,
@@ -184,6 +186,86 @@ test("the resolver gives up on a slow avatar after its timeout", async () => {
     new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
   const r = createProjectIconResolver({ fetch, readRemote: async () => "git@github.com:a/b.git", timeoutMs: 20 });
   assert.equal(await r.get(dir), null);
+});
+
+// ---- only Paseo's own project roots, and nothing outside them ----------------------------------------
+
+test("readRepoIcon refuses an icon that is a symlink, or sits in a symlinked directory, pointing out of the repo", async () => {
+  const outside = await repo({ "favicon.svg": SVG, "public/icon.svg": SVG });
+  const file = await repo({});
+  await symlink(join(outside, "favicon.svg"), join(file, "favicon.svg"));
+  assert.equal(await readRepoIcon(file), null);
+  const dir = await repo({});
+  await symlink(join(outside, "public"), join(dir, "public"));
+  assert.equal(await readRepoIcon(dir), null);
+  // A link that stays inside the repo is fine, and so is a root reached through a symlink (macOS's /var).
+  const inside = await repo({ "assets/logo.svg": SVG });
+  await symlink(join(inside, "assets/logo.svg"), join(inside, "favicon.svg"));
+  assert.equal((await readRepoIcon(inside))?.mimeType, "image/svg+xml");
+  const linkedRoot = join(await repo({}), "link");
+  await symlink(inside, linkedRoot);
+  assert.equal((await readRepoIcon(linkedRoot))?.mimeType, "image/svg+xml");
+});
+
+test("the resolver answers only for roots Paseo knows, and does not cache the others", async () => {
+  const dir = await repo({ "favicon.svg": SVG });
+  let remotes = 0;
+  let asked = 0;
+  const r = createProjectIconResolver({ readRemote: async () => (remotes++, null) });
+  const unknown = async () => (asked++, false);
+  assert.equal(await r.get(dir, { isKnownRoot: unknown }), null);
+  assert.equal(await r.get(dir, { isKnownRoot: unknown }), null);
+  assert.equal(asked, 2);
+  assert.equal(remotes, 0);
+  assert.equal((await r.get(dir, { isKnownRoot: async () => true }))?.mimeType, "image/svg+xml");
+  // A check that throws counts as unknown.
+  assert.equal(await r.get(await repo({ "favicon.svg": SVG }), { isKnownRoot: async () => { throw new Error("down"); } }), null);
+});
+
+test("the resolver keeps at most maxRoots roots, dropping the least recently asked", async () => {
+  const [a, b, c] = [await repo({}), await repo({}), await repo({})];
+  const seen: string[] = [];
+  const r = createProjectIconResolver({ readRemote: async (root) => (seen.push(root), null), maxRoots: 2 });
+  await r.get(a);
+  await r.get(b);
+  await r.get(a);
+  await r.get(c);
+  await r.get(a);
+  await r.get(b);
+  assert.deepEqual(seen, [a, b, c, b]);
+  assert.equal(MAX_CACHED_ROOTS, 200);
+});
+
+test("known roots are Paseo's project roots and workspace directories, listed at most every few seconds", async () => {
+  let lists = 0;
+  let roots = ["/p/one", "/w/two"];
+  let now = 0;
+  const known = createKnownRoots({ now: () => now, minIntervalMs: 10_000 });
+  const list = async () => (lists++, roots);
+  assert.equal(await known.has("/p/one", list), true);
+  assert.equal(await known.has("/w/two", list), true);
+  assert.equal(lists, 1);
+  // A miss lists again, but not more often than the interval.
+  roots = [...roots, "/p/new"];
+  assert.equal(await known.has("/p/new", list), false);
+  assert.equal(lists, 1);
+  now += 10_001;
+  assert.equal(await known.has("/p/new", list), true);
+  assert.equal(lists, 2);
+  // A failed listing keeps the previous roots.
+  now += 10_001;
+  assert.equal(await known.has("/p/other", async () => { throw new Error("down"); }), false);
+  assert.equal(await known.has("/p/one", list), true);
+});
+
+test("paseoRoots collects project roots and workspace directories, and survives a failing call", async () => {
+  const paseo = {
+    projects: { list: async () => ({ projects: [{ projectRootPath: "/p/a" }, { projectRootPath: "" }] }) },
+    workspaces: { list: async () => ({ entries: [{ projectRootPath: "/p/a", directory: "/w/a-wt" }, { projectRootPath: "/p/b", directory: "/p/b" }] }) },
+  };
+  assert.deepEqual((await paseoRoots(paseo)).sort(), ["/p/a", "/p/b", "/w/a-wt"]);
+  const broken = { projects: { list: async () => { throw new Error("x"); } }, workspaces: paseo.workspaces };
+  assert.deepEqual((await paseoRoots(broken)).sort(), ["/p/a", "/p/b", "/w/a-wt"]);
 });
 
 // ---- client side ---------------------------------------------------------------------------------
