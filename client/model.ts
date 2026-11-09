@@ -526,7 +526,7 @@ export const BOTS_PLUGIN_ID = "paseo-bots";
 /**
  * Whether opening this plugin screen counts as a visit: every screen does the moment it opens, except one
  * hidden from the switcher and a paseo-bots screen it names as pass-through (one that only forwards you on,
- * like its "Opening chat" screen). Without paseo-bots' API (`passThrough` null), nothing is skipped.
+ * like its "Opening chat" screen). With no list (`passThrough` null: no API and none stored), nothing is skipped.
  */
 export function countsScreenVisit(
   route: { pluginId: string; screenId: string },
@@ -536,6 +536,23 @@ export function countsScreenVisit(
 ): boolean {
   if (hidden.includes(key)) return false;
   return !(route.pluginId === BOTS_PLUGIN_ID && passThrough?.includes(route.screenId));
+}
+
+/** A stored pass-through list: its string entries, or null when it is not a list. */
+export function parsePassThroughScreens(value: unknown): string[] | null {
+  return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : null;
+}
+
+/** Drops visits to paseo-bots pass-through screens, on any host (recorded before the list was known). */
+export function dropPassThroughVisits(visits: Visits, passThrough: readonly string[]): Visits {
+  let next: Visits | null = null;
+  for (const key of Object.keys(visits)) {
+    const screen = parsePluginScreenKey(key);
+    if (!screen || screen.pluginId !== BOTS_PLUGIN_ID || !passThrough.includes(screen.screenId)) continue;
+    next ??= { ...visits };
+    delete next[key];
+  }
+  return next ?? visits;
 }
 
 function screenCard(key: string, meta: ScreenMeta | undefined): Card | null {
@@ -1362,7 +1379,7 @@ function cleanChatOpen(value: unknown): ChatOpen | null {
 /** Records `agentId` as a workspace's remembered tab as of `at`, unless the one remembered is as new or newer. */
 export function rememberAgentAt(memory: AgentMemory, key: string, agentId: string, at: number): AgentMemory {
   const current = memory[key];
-  if (current && current.at >= at) return memory;
+  if (current && (current.at > at || (current.at === at && current.agentId === agentId))) return memory;
   // Not `rememberAgent`: its refresh throttle would keep an older time for the same agent.
   const next: AgentMemory = {};
   for (const k of Object.keys(memory).slice(-(MAX_REMEMBERED_AGENTS - 1))) if (k !== key) next[k] = memory[k];

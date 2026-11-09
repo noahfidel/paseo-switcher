@@ -67,6 +67,8 @@ import {
   countsScreenVisit,
   chatOpensApi,
   applyChatOpens,
+  dropPassThroughVisits,
+  parsePassThroughScreens,
   rememberAgentAt,
   type ChatOpenState,
   carriedLists,
@@ -850,6 +852,28 @@ test("rememberAgentAt keeps a newer remembered tab and replaces an older one", (
   assert.deepEqual(rememberAgentAt(memory, "s:w2", "b", 1), { "s:w1": { agentId: "a1", at: 500 }, "s:w2": { agentId: "b", at: 1 } });
   // The same chat opened again soon after is stamped with the new time (no refresh throttle), so it beats a message in between.
   assert.deepEqual(rememberAgentAt(memory, "s:w1", "a1", 510), { "s:w1": { agentId: "a1", at: 510 } });
+  // A tie goes to the open: only a strictly newer remembered tab is kept.
+  assert.deepEqual(rememberAgentAt(memory, "s:w1", "a2", 500), { "s:w1": { agentId: "a2", at: 500 } });
+});
+
+test("dropPassThroughVisits removes visits to paseo-bots pass-through screens on every host, and nothing else", () => {
+  const opening = pluginScreenKey(S, "paseo-bots", "opening-chat");
+  const openingB = pluginScreenKey("srv_b", "paseo-bots", "opening-chat");
+  const bots = pluginScreenKey(S, "paseo-bots", "bots");
+  const other = pluginScreenKey(S, "flowly", "opening-chat");
+  const visits = { [opening]: 1, [openingB]: 2, [bots]: 3, [other]: 4, [workspaceKey(S, "w1")]: 5 };
+  assert.deepEqual(dropPassThroughVisits(visits, ["opening-chat"]), { [bots]: 3, [other]: 4, [workspaceKey(S, "w1")]: 5 });
+  assert.equal(dropPassThroughVisits(visits, ["nothing"]), visits);
+  assert.equal(dropPassThroughVisits(visits, []), visits);
+});
+
+test("parsePassThroughScreens reads a stored list of screen IDs; anything else is no list", () => {
+  assert.deepEqual(parsePassThroughScreens(["a", "b"]), ["a", "b"]);
+  assert.deepEqual(parsePassThroughScreens(["a", 3, null]), ["a"]);
+  assert.deepEqual(parsePassThroughScreens([]), []);
+  assert.equal(parsePassThroughScreens(null), null);
+  assert.equal(parsePassThroughScreens("a"), null);
+  assert.equal(parsePassThroughScreens({ a: 1 }), null);
 });
 
 test("a chat open records a visit to its workspace and makes the chat the remembered tab", () => {

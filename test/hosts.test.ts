@@ -784,3 +784,175 @@ test("a chat open in a workspace hidden from the switcher records nothing", asyn
     cleanGlobals();
   }
 });
+
+const PASS_THROUGH = "paseo-switcher:pass-through-screens";
+const OPENING = "plugin-screen|srv_a|paseo-bots|opening-chat";
+
+test("without paseo-bots' API, the pass-through list it last published still keeps its screens out", async () => {
+  const page = fakePage("/h/srv_a/plugin/paseo-bots/surface/opening-chat", { [PASS_THROUGH]: JSON.stringify(["opening-chat"]) });
+  try {
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.equal(stored(page, VISITS)[OPENING], undefined);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a pass-through screen recorded before paseo-bots' API appeared is dropped when it does, and the list is kept", async () => {
+  const page = fakePage("/h/srv_a/plugin/paseo-bots/surface/opening-chat");
+  try {
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.ok(stored(page, VISITS)[OPENING] > 0, "with no list at all, nothing is skipped");
+    g.__paseoBotsChatOpens = fakeChatOpens([], ["opening-chat"]);
+    switcher.open();
+    await tick();
+    assert.equal(stored(page, VISITS)[OPENING], undefined);
+    assert.deepEqual(JSON.parse(page.store.get(PASS_THROUGH) ?? "null"), ["opening-chat"]);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("recent() is folded oldest first, so the newest open is the most recent visit", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_home");
+  try {
+    g.__paseoBotsChatOpens = fakeChatOpens([
+      { serverId: "srv_a", workspaceId: "wks_new", agentId: "n", at: 3000 },
+      { serverId: "srv_a", workspaceId: "wks_old", agentId: "o", at: 1000 },
+    ]);
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    const agents = Object.keys(stored(page, AGENTS));
+    assert.deepEqual(agents, ["srv_a:wks_old", "srv_a:wks_new"], "the newest remembered tab is stored last");
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a switcher rebuilt on the same API leaves exactly one live listener", async () => {
+  fakePage("/h/srv_a/workspace/wks_home");
+  try {
+    const opens = fakeChatOpens();
+    g.__paseoBotsChatOpens = opens;
+    const calls: string[] = [];
+    const a = installSwitcher(fakeApi("srv_a", [], calls));
+    const b = installSwitcher(fakeApi("srv_b", [], calls));
+    await tick();
+    assert.equal(opens.listeners(), 1);
+    // Paseo re-runs a host's installation after a navigation, which builds a new switcher.
+    a.dispose();
+    const a2 = installSwitcher(fakeApi("srv_a", [], calls));
+    await tick();
+    assert.equal(opens.listeners(), 1);
+    a2.dispose();
+    b.dispose();
+    assert.equal(opens.listeners(), 0);
+    const c = installSwitcher(fakeApi("srv_a", [], calls));
+    await tick();
+    assert.equal(opens.listeners(), 1);
+    c.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a replaced API is followed, and a removed or invalid one is let go", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_home");
+  try {
+    const first = fakeChatOpens();
+    g.__paseoBotsChatOpens = first;
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    const second = fakeChatOpens([{ serverId: "srv_a", workspaceId: "wks_2", agentId: "c", at: 800 }]);
+    g.__paseoBotsChatOpens = second;
+    switcher.open();
+    await tick();
+    assert.equal(first.listeners(), 0);
+    assert.equal(second.listeners(), 1);
+    assert.equal(stored(page, VISITS)["srv_a:wks_2"], 800);
+    delete g.__paseoBotsChatOpens;
+    switcher.open();
+    await tick();
+    assert.equal(second.listeners(), 0);
+    const third = fakeChatOpens();
+    g.__paseoBotsChatOpens = third;
+    switcher.open();
+    await tick();
+    assert.equal(third.listeners(), 1);
+    g.__paseoBotsChatOpens = { ...third, version: 2 };
+    switcher.open();
+    await tick();
+    assert.equal(third.listeners(), 0);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("an API whose recent() or subscribe throws does not break the switcher", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_home");
+  try {
+    g.__paseoBotsChatOpens = {
+      ...fakeChatOpens(),
+      recent() {
+        throw new Error("boom");
+      },
+    };
+    const first = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    first.dispose();
+    g.__paseoBotsChatOpens = {
+      ...fakeChatOpens([{ serverId: "srv_a", workspaceId: "wks_1", agentId: "c", at: 900 }]),
+      subscribe() {
+        throw new Error("boom");
+      },
+    };
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.equal(stored(page, VISITS)["srv_a:wks_1"], 900, "recent() still counts when subscribing fails");
+    assert.ok(stored(page, VISITS)["srv_a:wks_home"] > 0, "the workspace on show is still recorded");
+    switcher.open();
+    await tick();
+    assert.equal(page.keydown(), 1);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("an open that arrives just before the switcher goes records nothing", async () => {
+  const page = fakePage("/h/srv_a/workspace/wks_home");
+  try {
+    const opens = fakeChatOpens();
+    g.__paseoBotsChatOpens = opens;
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    opens.emit({ serverId: "srv_a", workspaceId: "wks_late", agentId: "c", at: Date.now() });
+    switcher.dispose();
+    await tick(5);
+    assert.equal(stored(page, VISITS)["srv_a:wks_late"], undefined);
+    assert.equal(stored(page, AGENTS)["srv_a:wks_late"], undefined);
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a hidden plugin screen on show records no visit", async () => {
+  const hidden = "plugin-screen|srv_a|flowly|board";
+  const page = fakePage("/h/srv_a/plugin/flowly/surface/board", { "paseo-switcher:hidden": JSON.stringify([hidden]) });
+  try {
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    switcher.open();
+    await tick();
+    assert.equal(stored(page, VISITS)[hidden], undefined);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});

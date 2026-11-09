@@ -69,6 +69,8 @@ import {
   countsScreenVisit,
   chatOpensApi,
   applyChatOpens,
+  dropPassThroughVisits,
+  parsePassThroughScreens,
   type ChatOpensApi,
   pluginScreenKey,
   pluginScreenUrl,
@@ -188,6 +190,8 @@ const BACKGROUND_KEY = "paseo-switcher:include-background";
 const REPO_ICONS_KEY = "paseo-switcher:repo-icons";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
+/** The paseo-bots pass-through screen IDs last seen, for while its API is not (yet) there. */
+const PASS_THROUGH_KEY = "paseo-switcher:pass-through-screens";
 const HOSTS_KEY = "@paseo:daemon-registry";
 /** Paseo's app settings, read for the sidebar's Display settings (see the adapter notes). */
 const APP_SETTINGS_KEY = "@paseo:app-settings";
@@ -736,10 +740,27 @@ function createSwitcher(installs: Installation[]): Switcher {
   let chatOpens: ChatOpensApi | null = null;
   let chatOpensUnsubscribe: (() => void) | null = null;
 
-  /** The paseo-bots screen IDs that never count as visits; null without paseo-bots' API. */
+  /** The pass-through list paseo-bots last published, kept for the start-up window before its API appears. */
+  let storedPassThrough = parsePassThroughScreens(readJson(PASS_THROUGH_KEY, null));
+
+  /** The paseo-bots screen IDs that never count as visits: the live list, else the stored one; null with neither. */
   function passThroughScreens(): string[] | null {
-    const list = chatOpensApi(g.__paseoBotsChatOpens)?.passThroughScreens;
-    return Array.isArray(list) ? list : null;
+    return parsePassThroughScreens(chatOpensApi(g.__paseoBotsChatOpens)?.passThroughScreens) ?? storedPassThrough;
+  }
+
+  /** Stores the live list, and drops visits to its screens that were recorded before it was known. */
+  function adoptPassThrough(api: ChatOpensApi) {
+    const list = parsePassThroughScreens(api.passThroughScreens);
+    if (!list) return;
+    if (JSON.stringify(list) !== JSON.stringify(storedPassThrough)) {
+      storedPassThrough = list;
+      writeJson(PASS_THROUGH_KEY, list);
+    }
+    const kept = dropPassThroughVisits(visits, list);
+    if (kept === visits) return;
+    setVisits(kept);
+    // The screen on show is judged again against the list on the next route check.
+    shownScreen = null;
   }
 
   function foldChatOpens(opens: readonly unknown[]) {
@@ -758,9 +779,11 @@ function createSwitcher(installs: Installation[]): Switcher {
     unwatchChatOpens();
     if (!api) return;
     chatOpens = api;
+    adoptPassThrough(api);
     try {
       const recent = api.recent();
-      if (Array.isArray(recent)) foldChatOpens(recent);
+      // Most recent first: fold the oldest first, so the newest open is stored as the newest.
+      if (Array.isArray(recent)) foldChatOpens([...recent].reverse());
     } catch {
       // A broken list: new opens still count.
     }
