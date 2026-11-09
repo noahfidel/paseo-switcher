@@ -591,7 +591,8 @@ function createSwitcher(installs: Installation[]): Switcher {
         return null;
       }
     }
-    const own = installs[installs.length - 1];
+    // With several installations, which one is the host on show is unknown.
+    const own = installs.length === 1 ? installs[0] : null;
     return own && host === shownHost() ? own.paseo : null;
   }
 
@@ -1232,7 +1233,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       cards = buildCards(mru, loadedWorkspaces(hostData), limit, includeScreens ? screens : null, hiddenKeys);
       return;
     }
-    const all = filterCards(query, mru, loadedWorkspaces(hostData), Infinity);
+    const all = filterCards(query, mru, loadedWorkspaces(hostData), Infinity, display);
     matches = all.length;
     cards = all.slice(0, MAX_LIMIT);
   }
@@ -1524,7 +1525,8 @@ function createSwitcher(installs: Installation[]): Switcher {
       .then(() => inst.paseo.workspaces.list({ page: { limit: 1 }, sort: [{ key: "activity_at", direction: "desc" }] }))
       .then(
         (result) => {
-          inst.probe = result.entries[0]?.id ?? null;
+          // A host that lists nothing yet is probed again after REPO_ICON_RETRY_MS.
+          inst.probe = result.entries[0]?.id;
           if (root && inst.probe) render();
         },
         () => {

@@ -1036,6 +1036,15 @@ test("sidebar display: the trailing item is the time, the diff, or neither; stat
   assert.equal(rowFacts(idle, FACTS_NOW, undefined, { ...ALL, trailing: "diff" }).label, null, "idle with no time: no label");
 });
 
+test("filtering ranks a word-start match on the title the row shows, the branch when the sidebar titles by branch", () => {
+  const fix = { ...info("fix", 1), name: "Fix login", branch: "auth-refactor" };
+  const notes = { ...info("notes", 2), name: "auth refactor notes", branch: "notes" };
+  const hosts = one(list(fix, notes));
+  assert.deepEqual(filterCards("auth", [], hosts).map((c) => c.workspaceId), ["notes", "fix"]);
+  const branches = { ...DEFAULT_SIDEBAR_DISPLAY, titleSource: "branch" as const };
+  assert.deepEqual(filterCards("auth", [], hosts, undefined, branches).map((c) => c.workspaceId), ["fix", "notes"]);
+});
+
 // Paseo re-runs the plugin after the switcher navigates by route (plugin screens, hidden workspaces),
 // so a fresh switcher opened right after a switch must start from the lists the previous one loaded.
 test("a reinstalled switcher keeps the workspace lists the previous one loaded, per host", () => {

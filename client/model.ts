@@ -759,7 +759,14 @@ function startsWord(text: string, at: number): boolean {
  * words. Names that match at the start of a word come first; ties keep recency (visit order, then
  * latest activity), so the workspace you were just in stays near the top.
  */
-export function filterCards(query: string, mru: readonly string[], hosts: HostWorkspaces | null, max = MAX_LIMIT): Card[] {
+/** Workspaces matching every word; those whose shown title (see `workspaceTitle`) has each word at a word start rank first. */
+export function filterCards(
+  query: string,
+  mru: readonly string[],
+  hosts: HostWorkspaces | null,
+  max = MAX_LIMIT,
+  display: SidebarDisplay = DEFAULT_SIDEBAR_DISPLAY,
+): Card[] {
   const words = queryWords(query);
   if (!words.length || !hosts) return [];
   const recent = new Map(mru.map((key, i) => [key, i]));
@@ -767,7 +774,7 @@ export function filterCards(query: string, mru: readonly string[], hosts: HostWo
   for (const [serverId, workspaces] of hosts) for (const info of workspaces.values()) {
     const text = haystack(info);
     if (!words.every((w) => text.includes(w))) continue;
-    const name = info.name.toLowerCase();
+    const name = workspaceTitle(info, display).toLowerCase();
     const named = words.every((w) => {
       for (let at = name.indexOf(w); at !== -1; at = name.indexOf(w, at + 1)) if (startsWord(name, at)) return true;
       return false;

@@ -373,3 +373,20 @@ test("a newer plugin copy's switcher is not replaced by this one", async () => {
     cleanGlobals();
   }
 });
+
+test("without the SDK's host lookup and with several installations, no installation's API is taken for the host on show", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  fakePage("/h/srv_a/workspace/wks_a1", { "@paseo:daemon-registry": registry });
+  try {
+    const calls: string[] = [];
+    // Which host each belongs to is unknown without getPaseoClient; the newest is srv_b's.
+    const a = installSwitcher(fakeApi("srv_a", ["wks_a1"], calls));
+    const b = installSwitcher(fakeApi("srv_b", ["wks_b1"], calls));
+    await tick(20);
+    assert.deepEqual(calls.filter((c) => c.endsWith(":workspaces")), []);
+    a.dispose();
+    b.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
