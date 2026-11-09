@@ -514,7 +514,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   } | null = null;
   /** Every match for the query; only the first MAX_LIMIT are listed. */
   let matches = 0;
-  /** The row a first ⌫ armed (a workspace's key, `chat:<id>` or `terminal:<id>`), until another key or a timeout. */
+  /** The row a first ⌫ armed (a workspace's key, `chat:<serverId>:<id>` or `terminal:<serverId>:<id>`), until another key or a timeout. */
   let armed: string | null = null;
   let armTimer: any = null;
   let armedAt = 0;
@@ -974,7 +974,7 @@ function createSwitcher(installs: Installation[]): Switcher {
         if (mine !== generation) return false;
         const list: AgentInfo[] = [];
         for (const { agent } of result.entries) {
-          if (agent.archivedAt || agent.internal || archiving.has(chatArmKey(agent.id))) continue;
+          if (agent.archivedAt || agent.internal || archiving.has(chatArmKey(host, agent.id))) continue;
           const status = agentStateBucket({
             status: agent.status,
             pendingPermissionCount: agent.pendingPermissions?.length ?? 0,
@@ -1059,7 +1059,7 @@ function createSwitcher(installs: Installation[]): Switcher {
         const list: TerminalInfo[] = [];
         for (const t of result.entries) {
           // Only the workspace's own terminals; one no workspace owns is never assigned to this one.
-          if (t.workspaceId !== workspaceId || archiving.has(`terminal:${t.id}`)) continue;
+          if (t.workspaceId !== workspaceId || archiving.has(terminalArmKey(host, t.id))) continue;
           list.push({ id: t.id, workspaceId: t.workspaceId, name: t.name ?? "" });
         }
         terminalLists.set(key, list);
@@ -1463,15 +1463,20 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (!root) show();
   }
 
-  function chatArmKey(agentId: string): string {
-    return `chat:${agentId}`;
+  /** Row keys of sessions, by host (see sessionKey): two hosts can hold the same id. */
+  function chatArmKey(host: string, agentId: string): string {
+    return `chat:${host}:${agentId}`;
+  }
+
+  function terminalArmKey(host: string, terminalId: string): string {
+    return `terminal:${host}:${terminalId}`;
   }
 
   /** What an armed ⌫ would archive or close: the selected workspace row, or the selected session. */
   function selectedRowKey(): string | null {
     if (drill) {
       const session = drill.sessions[drill.index];
-      return session ? sessionKey(session) : null;
+      return session ? sessionKey(session, splitKey(drill.key).serverId) : null;
     }
     return cards[index]?.key ?? null;
   }
@@ -1552,9 +1557,9 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** Archives a chat through its host's API; the row goes at once, and an emptied chat list returns to the workspaces. */
   async function archiveChat(chat: AgentInfo) {
     if (!drill) return;
-    const rowKey = chatArmKey(chat.id);
-    if (archiving.has(rowKey)) return;
     const serverId = splitKey(drill.key).serverId;
+    const rowKey = chatArmKey(serverId, chat.id);
+    if (archiving.has(rowKey)) return;
     const api = apiFor(serverId);
     if (!api) return showNotice(archiveError("that host is not reachable"));
     holdEnds();
@@ -1582,9 +1587,10 @@ function createSwitcher(installs: Installation[]): Switcher {
   async function closeTerminal(terminal: TerminalInfo) {
     if (!drill) return;
     const key = drill.key;
-    const rowKey = `terminal:${terminal.id}`;
+    const host = splitKey(key).serverId;
+    const rowKey = terminalArmKey(host, terminal.id);
     if (archiving.has(rowKey)) return;
-    const api = apiFor(splitKey(key).serverId);
+    const api = apiFor(host);
     if (!api?.terminals) return showNotice(archiveError("that host is not reachable", "close"));
     holdEnds();
     archivedAt = Date.now();
@@ -1621,7 +1627,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     const session = drill?.sessions[at];
     if (!drill || !session) return;
     drill.index = at;
-    const rowKey = sessionKey(session);
+    const rowKey = sessionKey(session, splitKey(drill.key).serverId);
     const isArmed = armed === rowKey;
     const todo = clickArchiveAction({ armed: isArmed, armedForMs: isArmed ? Date.now() - armedAt : Infinity, sinceArchiveMs: Date.now() - archivedAt });
     if (todo === "ignore") return;
@@ -1662,15 +1668,15 @@ function createSwitcher(installs: Installation[]): Switcher {
   function refreshSessions() {
     if (!drill) return;
     const selected = drill.sessions[drill.index];
-    const selectedKey = selected ? sessionKey(selected) : null;
     const { serverId: server, workspaceId } = splitKey(drill.key);
+    const selectedKey = selected ? sessionKey(selected, server) : null;
     const list = agentsOf(server)?.list ?? null;
     const terminals = terminalLists.get(drill.key) ?? null;
     const all = sessionsForWorkspace(list, terminals, workspaceId, agentMemory[drill.key]?.agentId);
     drill.loaded = list !== null && (terminals !== null || drill.terminalsFailed);
     drill.total = all.length;
     drill.sessions = filterSessions(all, drill.query);
-    const kept = drill.sessions.findIndex((s) => sessionKey(s) === selectedKey);
+    const kept = drill.sessions.findIndex((s) => sessionKey(s, server) === selectedKey);
     drill.index = kept >= 0 ? kept : clampIndex(drill.index, drill.sessions.length);
   }
 
@@ -1993,7 +1999,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   function renderSession(session: Session, i: number, at: number): Node {
     const title = sessionTitle(session);
     const chat = session.kind === "chat";
-    const node = el("div", `pws-card pws-row ${chat ? "pws-chat" : "pws-terminal"}${armed === sessionKey(session) ? " pws-armed" : ""}`);
+    const node = el("div", `pws-card pws-row ${chat ? "pws-chat" : "pws-terminal"}${drill && armed === sessionKey(session, splitKey(drill.key).serverId) ? " pws-armed" : ""}`);
     node.setAttribute("role", "option");
     node.setAttribute("aria-label", title);
     node.setAttribute(chat ? "data-agent" : "data-terminal", session.id);

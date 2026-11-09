@@ -121,8 +121,10 @@ test("a session's title, key, open target and ⌫ verb depend on its kind", () =
   assert.equal(sessionTitle(untitled), UNTITLED_CHAT);
   assert.equal(sessionTitle(shell), "zsh");
   assert.equal(sessionTitle(blank), UNTITLED_TERMINAL);
-  assert.equal(sessionKey(chat), "chat:a1");
-  assert.equal(sessionKey(shell), "terminal:t1");
+  // Keyed by host too: two hosts can hold the same id.
+  assert.equal(sessionKey(chat, "srv_a"), "chat:srv_a:a1");
+  assert.equal(sessionKey(shell, "srv_a"), "terminal:srv_a:t1");
+  assert.notEqual(sessionKey(shell, "srv_a"), sessionKey(shell, "srv_b"));
   assert.equal(sessionOpenTarget(chat), "agent:a1");
   assert.equal(sessionOpenTarget(shell), "terminal:t1");
   assert.equal(sessionVerb(chat), "archive");
@@ -167,11 +169,11 @@ test("providerLabel names the agent's provider the way Paseo does, and nothing w
 });
 
 test("the armed hint says close for a terminal and archive for everything else", () => {
-  assert.equal(armedHint("terminal:t1", false), "again to close");
-  assert.equal(armedHint("chat:a1", false), "again to archive");
+  assert.equal(armedHint("terminal:srv:t1", false), "again to close");
+  assert.equal(armedHint("chat:srv:a1", false), "again to archive");
   assert.equal(armedHint("srv:wks", false), "again to archive");
-  assert.equal(armedHint("terminal:t1", true), "Tap × again to close");
-  assert.equal(armedHint("chat:a1", true), "Tap × again to archive");
+  assert.equal(armedHint("terminal:srv:t1", true), "Tap × again to close");
+  assert.equal(armedHint("chat:srv:a1", true), "Tap × again to archive");
 });
 
 // ---- which rows have chats, and what the chat list says ------------------------------------------------

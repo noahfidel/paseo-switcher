@@ -709,6 +709,41 @@ test("a terminal no workspace owns is never listed under the workspace on show",
   }
 });
 
+test("closing a terminal on one host keeps a terminal with the same id on another host listed", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
+  const calls: string[] = [];
+  const apis: Record<string, any> = {
+    srv_a: fakeApi("srv_a", ["wks_a0"], calls, undefined, {}, { wks_a0: ["t1"] }),
+    srv_b: fakeApi("srv_b", ["wks_b1"], calls, undefined, {}, { wks_b1: ["t1"] }),
+  };
+  const switcher = installSwitcher(fakeApi("own", [], calls), { getPaseoClient: (serverId: string) => apis[serverId] });
+  try {
+    await tick(20);
+    page.press({ key: "`", code: "Backquote", metaKey: true });
+    await tick(150);
+    page.press(RIGHT);
+    await tick(30);
+    assert.ok(calls.includes("srv_b:terminals:wks_b1"), "starts on srv_b's workspace");
+    page.press(BS);
+    await confirmBackspace(page);
+    assert.deepEqual(calls.filter((c) => c.includes("kill")), ["srv_b:kill-terminal:t1"]);
+    // Back on the workspaces (the list emptied); find srv_a's workspace and list its sessions.
+    for (let i = 0; i < 4 && !calls.includes("srv_a:terminals:wks_a0"); i++) {
+      page.press(DOWN);
+      page.press(RIGHT);
+      await tick(30);
+      if (!calls.includes("srv_a:terminals:wks_a0")) page.press({ key: "ArrowLeft", code: "ArrowLeft", metaKey: true });
+    }
+    assert.ok(calls.includes("srv_a:terminals:wks_a0"));
+    const counts = page.texts().filter((t) => /^\d+ (recent )?sessions?$/.test(t));
+    assert.equal(counts.at(-1), "1 session", counts.join("|"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
 test("an idle chat now needs a second ⌫ too, with the archive hint", async () => {
   const { page, archived, switcher } = await openWithChats(["c1", "c2"]);
   try {

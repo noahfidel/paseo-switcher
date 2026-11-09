@@ -919,9 +919,12 @@ export function sessionTitle(session: Session): string {
   return session.kind === "chat" ? chatTitle(session.agent) : session.terminal.name.trim() || UNTITLED_TERMINAL;
 }
 
-/** A session's row key, for arming and for keeping a row out of lists while it is being removed. */
-export function sessionKey(session: Session): string {
-  return `${session.kind}:${session.id}`;
+/**
+ * A session's row key, for arming and for keeping a row out of lists while it is being removed. It names the
+ * host, since two hosts can hold the same id: `chat:<serverId>:<id>` or `terminal:<serverId>:<id>`.
+ */
+export function sessionKey(session: Session, serverId: string): string {
+  return `${session.kind}:${serverId}:${session.id}`;
 }
 
 /** The `?open=` value that makes Paseo reveal the session's tab (its `parseWorkspaceOpenIntent`). */
@@ -934,7 +937,7 @@ export function sessionVerb(session: Session): "archive" | "close" {
   return session.kind === "terminal" ? "close" : "archive";
 }
 
-/** The hint line while a row is armed, for its arm key (`terminal:<id>` closes; anything else archives). */
+/** The hint line while a row is armed, for its arm key (`terminal:…` closes; anything else archives). */
 export function armedHint(armedKey: string, touch: boolean): string {
   const verb = armedKey.startsWith("terminal:") ? "close" : "archive";
   return touch ? `Tap × again to ${verb}` : `again to ${verb}`;
