@@ -1,7 +1,13 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import {
   agentIdFromTabTestId,
+  agentStateBucket,
   agentToOpen,
+  chatFacts,
+  chatTitle,
+  chatsForWorkspace,
+  filterChats,
+  keyAction,
   ago,
   rowFacts,
   buildCards,
@@ -161,6 +167,8 @@ const CARD_MIN = 176;
 const ASPECT = 0.66;
 /** Estimated list row height, so the list knows it overflows without measuring. */
 const ROW_H = 64;
+/** A chat row has one line. */
+const CHAT_ROW_H = 44;
 /** Thumbnails zoom past the pane's side margins toward the conversation column. */
 const ZOOM = 1.35;
 const BLANK_IMAGE = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -307,6 +315,22 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   let dark = false;
   /** Typed while the switcher is open; filters every workspace, not only recent ones. */
   let query = "";
+  /**
+   * One workspace's chats, shown in place of the workspaces (→ on a row, ↓ on thumbnails). The
+   * workspace list keeps its own selection and filter underneath, so ← returns to it as it was.
+   */
+  let drill: {
+    key: string;
+    name: string;
+    /** The chats on show (filtered when there is a query). */
+    chats: AgentInfo[];
+    /** All the workspace's chats, before the filter. */
+    total: number;
+    /** The agent list for this host has loaded. */
+    loaded: boolean;
+    index: number;
+    query: string;
+  } | null = null;
   /** Every match for the query; only the first MAX_LIMIT are listed. */
   let matches = 0;
   /** The host of the loaded workspace list, for when neither the route nor the history names one. */
@@ -537,6 +561,12 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
         const list: AgentInfo[] = [];
         for (const { agent } of result.entries) {
           if (agent.archivedAt || agent.internal) continue;
+          const status = agentStateBucket({
+            status: agent.status,
+            pendingPermissionCount: agent.pendingPermissions?.length ?? 0,
+            requiresAttention: agent.requiresAttention,
+            attentionReason: agent.attentionReason,
+          });
           list.push({
             id: agent.id,
             workspaceId: agent.workspaceId ?? null,
@@ -548,13 +578,19 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
             }),
             automated: isAutomatedChat(agent.labels ?? {}),
             botId: agent.labels?.[BOT_LABEL] || null,
+            title: agent.title ?? null,
+            status,
+            // How long it has been running, or waiting since it asked or finished.
+            statusAt: (status === "running" ? latest(agent.activeTurn?.startedAt) : status === "done" ? 0 : latest(agent.attentionTimestamp)) || undefined,
           });
         }
         agents = { serverId: serverId(), list };
         agentsAt = Date.now();
         const before = visits;
         countMessageVisits();
+        if (root && drill) refreshChats();
         if (root && visits !== before) refreshCardsAndRender();
+        else if (root && drill) render();
       })
       .catch(() => {
         // Keep the previous list; switching then uses only the remembered agent.
@@ -869,6 +905,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     mode = nextMode;
     open = true;
     query = "";
+    drill = null;
     cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null, hiddenKeys);
     index = direction === 1 ? initialIndex(cards, currentStopKey()) : wrap(-1, cards.length);
     clearTimeout(showTimer);
@@ -933,14 +970,80 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   }
 
   function move(delta: number) {
-    if (!cards.length) return;
-    index = wrap(index + delta, cards.length);
+    if (drill) {
+      if (!drill.chats.length) return;
+      drill.index = wrap(drill.index + delta, drill.chats.length);
+    } else {
+      if (!cards.length) return;
+      index = wrap(index + delta, cards.length);
+    }
     if (root) select();
+  }
+
+  // ---- one workspace's chats -----------------------------------------------------------------------
+
+  /** Replaces the list with the selected workspace's chats. Plugin screens have none. */
+  function drillIn() {
+    const card = cards[index];
+    if (!card || card.screen) return;
+    drill = { key: card.key, name: card.info?.name ?? rowLabel(card.key) ?? "Workspace", chats: [], total: 0, loaded: false, index: 0, query: "" };
+    refreshChats();
+    clearTimeout(showTimer);
+    render();
+    if (!drill.loaded || agentsStale(WORKSPACES_STALE_MS)) void loadAgents();
+  }
+
+  /** Back to the workspaces, with the selection on the workspace you came from. */
+  function drillOut() {
+    drill = null;
+    render();
+  }
+
+  /** Rebuilds the chat list from the agent list, keeping the selected chat when it is still there. */
+  function refreshChats() {
+    if (!drill) return;
+    const selected = drill.chats[drill.index]?.id;
+    const { serverId: server, workspaceId } = splitKey(drill.key);
+    const list = agents && agents.serverId === server ? agents.list : null;
+    const all = chatsForWorkspace(list, workspaceId, agentMemory[drill.key]?.agentId);
+    drill.loaded = list !== null;
+    drill.total = all.length;
+    drill.chats = filterChats(all, drill.query);
+    const kept = drill.chats.findIndex((c) => c.id === selected);
+    drill.index = kept >= 0 ? kept : clampIndex(drill.index, drill.chats.length);
+  }
+
+  function setChatQuery(next: string) {
+    if (!drill || next === drill.query) return;
+    drill.query = next;
+    mode = "sticky";
+    refreshChats();
+    drill.index = 0;
+    render();
+  }
+
+  /** Opens a chat in its workspace and remembers it as that workspace's last focused chat. */
+  function commitChat(at: number) {
+    if (!drill) return;
+    const chat = drill.chats[at];
+    if (!chat) {
+      // Nothing typed and no chats: open the workspace itself. A filter with no match opens nothing.
+      if (!drill.query) commit();
+      return;
+    }
+    const key = drill.key;
+    agentMemory = rememberAgent(agentMemory, key, chat.id, Date.now());
+    writeJson(AGENTS_KEY, agentMemory);
+    close();
+    const { serverId: server, workspaceId } = splitKey(key);
+    // As in commit(): let the closed switcher paint before Paseo renders the chat.
+    win.requestAnimationFrame(() => setTimeout(() => goTo(workspaceRoute(server, workspaceId, chat.id)), 0));
   }
 
   function close() {
     open = false;
     query = "";
+    drill = null;
     unwatchAvatars();
     clearTimeout(showTimer);
     if (root) {
@@ -1010,14 +1113,18 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     }
     const surface = surfaceOf(currentPane() ?? doc.body);
     dark = isDark(surface);
-    // A phone has room for one column; thumbnails would be cut off at the edges.
-    const list = layout === "list" || narrow();
+    // A workspace's chats are always a list, whatever the layout.
+    const list = Boolean(drill) || listShown();
     root.classList.toggle("pws-dark", dark);
     watchAvatars();
     root.classList.toggle("pws-list", list);
+    root.classList.toggle("pws-overflow", false);
     root.classList.toggle("pws-entered", !fresh);
     root.style.setProperty("--pws-surface", surface);
-    if (list) {
+    if (drill) {
+      // Chat rows plus the header and panel padding, against the panel's max height.
+      overflowing = drill.chats.length * CHAT_ROW_H + 12 + 44 > win.innerHeight - Math.max(48, win.innerHeight * 0.16) - 150;
+    } else if (list) {
       // Rows plus panel padding, against the panel's max height (see .pws-list .pws-panel).
       overflowing = cards.length * ROW_H + 12 > win.innerHeight - Math.max(48, win.innerHeight * 0.16) - 150;
     } else {
@@ -1033,8 +1140,21 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
 
     const panel = el("div", "pws-panel");
     panel.setAttribute("role", "listbox");
-    panel.setAttribute("aria-label", "Switch workspace");
     const at = Date.now();
+    if (drill) {
+      panel.setAttribute("aria-label", `Chats in ${drill.name}`);
+      if (drill.chats.length) drill.chats.forEach((chat, i) => panel.appendChild(renderChat(chat, i, at)));
+      else panel.appendChild(chatEmptyState());
+      const sheet = el("div", "pws-sheet");
+      sheet.appendChild(drillHeader());
+      if (drill.query) sheet.appendChild(queryBar(drill.query, drill.chats.length === 1 ? "1 match" : drill.chats.length ? `${drill.chats.length} matches` : ""));
+      sheet.appendChild(panel);
+      root.replaceChildren(sheet, hintBar());
+      if (fresh) host.appendChild(root);
+      select();
+      return;
+    }
+    panel.setAttribute("aria-label", "Switch workspace");
     if (cards.length) cards.forEach((card, i) => panel.appendChild(list ? renderRow(card, i, at) : renderCard(card, i)));
     else panel.appendChild(emptyState());
     if (!query && cards.length === 1 && cards[0].key === currentStopKey()) {
@@ -1043,7 +1163,10 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     }
     // One sheet: the query, when there is one, is its header, so typing never moves the rows.
     const sheet = el("div", "pws-sheet");
-    if (query) sheet.appendChild(queryBar());
+    if (query) {
+      const count = matches > cards.length ? `${cards.length} of ${matches}` : matches === 1 ? "1 match" : `${matches} matches`;
+      sheet.appendChild(queryBar(query, matches ? count : ""));
+    }
     sheet.appendChild(panel);
     const parts: Node[] = [sheet];
     if (cards.length || query) parts.push(hintBar());
@@ -1089,20 +1212,89 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     return win.innerWidth < 600;
   }
 
+  /** The workspaces show as a list: chosen, or a phone, which has room for one column only. */
+  function listShown(): boolean {
+    return layout === "list" || narrow();
+  }
+
   function touchScreen(): boolean {
     return coarse || narrow();
   }
 
   /** The typed filter, shown above the results like a search field. */
-  function queryBar(): Node {
+  function queryBar(text: string, count: string): Node {
     const bar = el("div", "pws-query");
     bar.appendChild(icon("search", "pws-query-icon"));
-    const text = el("span", "pws-query-text", query);
-    bar.appendChild(text);
+    bar.appendChild(el("span", "pws-query-text", text));
     bar.appendChild(el("span", "pws-caret"));
-    const count = matches > cards.length ? `${cards.length} of ${matches}` : matches === 1 ? "1 match" : `${matches} matches`;
-    bar.appendChild(el("span", "pws-query-count", matches ? count : ""));
+    bar.appendChild(el("span", "pws-query-count", count));
     return bar;
+  }
+
+  /** Which workspace's chats these are; clicking it, like ←, goes back to the workspaces. */
+  function drillHeader(): Node {
+    const header = el("div", "pws-drill");
+    header.setAttribute("role", "button");
+    header.setAttribute("aria-label", "Back to workspaces");
+    header.addEventListener("mousedown", (e: any) => {
+      e.preventDefault();
+      drillOut();
+    });
+    header.appendChild(el("kbd", "pws-kbd", "←"));
+    header.appendChild(el("span", "pws-drill-name", drill?.name ?? ""));
+    const total = drill?.total ?? 0;
+    header.appendChild(el("span", "pws-drill-count", drill?.loaded ? (total === 1 ? "1 chat" : `${total} chats`) : ""));
+    return header;
+  }
+
+  function chatEmptyState(): Node {
+    const box = el("div", "pws-empty");
+    if (drill?.query) {
+      box.appendChild(el("div", "pws-empty-title", `No chat matches “${drill.query}”`));
+      box.appendChild(el("div", "pws-empty-text", "Chat titles are searched."));
+    } else if (!drill?.loaded) {
+      const title = el("div", "pws-empty-title pws-loading");
+      title.appendChild(el("span", "pws-spin"));
+      title.appendChild(el("span", "", "Loading chats"));
+      box.appendChild(title);
+    } else {
+      box.appendChild(el("div", "pws-empty-title", "No chats in this workspace"));
+      box.appendChild(el("div", "pws-empty-text", "Enter opens the workspace."));
+    }
+    return box;
+  }
+
+  /** A chat row: its title, and its status in the words a workspace row uses. */
+  function renderChat(chat: AgentInfo, i: number, at: number): Node {
+    const title = chatTitle(chat);
+    const node = el("div", "pws-card pws-row pws-chat");
+    node.setAttribute("role", "option");
+    node.setAttribute("aria-label", title);
+    node.setAttribute("data-agent", chat.id);
+    node.addEventListener("mousemove", () => {
+      if (drill && drill.index !== i) {
+        drill.index = i;
+        select();
+      }
+    });
+    node.addEventListener("click", () => commitChat(i));
+
+    const lead = el("div", "pws-lead");
+    lead.appendChild(icon("chat", "pws-icon pws-badge-icon"));
+    node.appendChild(lead);
+
+    const line = el("div", "pws-l1");
+    line.appendChild(nameNode("pws-name", title, drill?.query ?? ""));
+    node.appendChild(line);
+
+    const facts = chatFacts(chat, at);
+    if (facts.label) {
+      const status = el("div", `pws-status pws-status-${facts.state}`);
+      if (facts.state !== "done") status.appendChild(statusMark(facts.state));
+      status.appendChild(el("span", "", facts.label));
+      node.appendChild(status);
+    }
+    return node;
   }
 
   function emptyState(): Node {
@@ -1126,7 +1318,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   function hintBar(): Node {
     const bar = el("div", "pws-hint");
     if (touchScreen()) {
-      bar.textContent = "Tap a workspace to switch";
+      bar.textContent = drill ? "Tap a chat to open it" : "Tap a workspace to switch";
       return bar;
     }
     const keys = (caps: string[], label: string) => {
@@ -1135,23 +1327,51 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       item.appendChild(el("span", "", label));
       bar.appendChild(item);
     };
-    const arrows = layout === "list" ? ["↑", "↓"] : ["←", "→"];
+    if (drill) {
+      if (drill.query && !drill.chats.length) {
+        keys(["Backspace"], "edit");
+        keys(["Esc"], "clear");
+      } else if (drill.query) {
+        keys(["Enter"], "open");
+        keys(["↑", "↓"], "move");
+        keys(["Esc"], "clear");
+      } else if (mode === "hold") {
+        keys([SHORTCUTS[shortcut].modifierLabel], "release to open");
+        keys(["Shift", SHORTCUTS[shortcut].keyLabel], "back");
+        keys(["←"], "workspaces");
+        keys(["Esc"], "cancel");
+        bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
+      } else {
+        keys(["Enter"], "open");
+        keys(["↑", "↓"], "move");
+        keys(["←"], "workspaces");
+        keys(["Esc"], "close");
+        bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
+      }
+      return bar;
+    }
+    const arrows = listShown() ? ["↑", "↓"] : ["←", "→"];
+    // Only workspaces have chats; with plugin screens alone there is nothing to open.
+    const chats = cards.some((c) => !c.screen) ? () => keys([listShown() ? "→" : "↓"], "chats") : () => {};
     if (query && !cards.length) {
       keys(["Backspace"], "edit");
       keys(["Esc"], "clear");
     } else if (query) {
       keys(["Enter"], "switch");
       keys(arrows, "move");
+      chats();
       keys(["Esc"], "clear");
     } else if (mode === "hold") {
       keys([SHORTCUTS[shortcut].modifierLabel], "release to switch");
       keys(["Shift", SHORTCUTS[shortcut].keyLabel], "back");
+      chats();
       keys(["⌫"], "hide from switcher");
       keys(["Esc"], "cancel");
       bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
     } else {
       keys(["Enter"], "switch");
       keys(arrows, "move");
+      chats();
       keys(["⌫"], "hide from switcher");
       keys(["Esc"], "close");
       bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
@@ -1160,14 +1380,14 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   }
 
   /** The workspace name, with the typed filter marked. */
-  function nameNode(className: string, name: string): Node {
+  function nameNode(className: string, name: string, filter = query): Node {
     const node = el("div", className);
-    if (!query) {
+    if (!filter) {
       node.textContent = name;
       return node;
     }
     let from = 0;
-    for (const [start, end] of matchRanges(name, query)) {
+    for (const [start, end] of matchRanges(name, filter)) {
       if (start > from) node.appendChild(doc.createTextNode(name.slice(from, start)));
       node.appendChild(el("mark", "pws-mark", name.slice(start, end)));
       from = end;
@@ -1447,12 +1667,13 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   function select() {
     if (!root) return;
     const nodes = root.querySelectorAll(".pws-card");
+    const at = drill ? drill.index : index;
     for (let i = 0; i < nodes.length; i++) {
-      nodes[i].classList.toggle("pws-selected", i === index);
-      nodes[i].setAttribute("aria-selected", String(i === index));
+      nodes[i].classList.toggle("pws-selected", i === at);
+      nodes[i].setAttribute("aria-selected", String(i === at));
     }
     // Scrolling forces a layout; only an overflowing panel (small windows, many cards) needs it.
-    if (overflowing) nodes[index]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (overflowing) nodes[at]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }
 
   function rowLabel(key: string): string | null {
@@ -1493,22 +1714,48 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     if (!open) return;
     if (key === "Control" || key === "Shift" || key === "Alt" || key === "Meta") return;
     stop(e);
-    if (key === "Escape") {
-      if (query) setQuery("");
-      else close();
-    } else if (key === "Enter") commit();
-    else if (key === "ArrowRight" || key === "ArrowDown") move(1);
-    else if (key === "ArrowLeft" || key === "ArrowUp") move(-1);
-    // With nothing typed, Backspace hides the selected row; with a filter it keeps editing it.
-    else if (key === "Backspace" && !query && cards[index]) hideKey(cards[index].key);
-    else if (key === "Backspace") setQuery(e.ctrlKey || e.altKey ? "" : query.slice(0, -1));
-    else if (key.length === 1 && (!e.metaKey || SHORTCUTS[shortcut].modifier === "Meta") && (query || key !== " ")) setQuery(query + key);
+    const card = cards[index];
+    const filter = drill ? drill.query : query;
+    const edit = drill ? setChatQuery : setQuery;
+    const action = keyAction(
+      key,
+      {
+        layout: listShown() ? "list" : "strip",
+        drilled: Boolean(drill),
+        query: filter,
+        canDrill: Boolean(card && !card.screen),
+        hasSelection: Boolean(card),
+        metaTypes: SHORTCUTS[shortcut].modifier === "Meta",
+      },
+      { ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey },
+    );
+    switch (action.type) {
+      case "move":
+        return move(action.delta);
+      case "drill":
+        return drillIn();
+      case "back":
+        return drillOut();
+      case "commit":
+        return drill ? commitChat(drill.index) : commit();
+      case "cancel":
+        return close();
+      case "clear":
+        return edit("");
+      case "hide":
+        return hideKey(card.key);
+      case "erase":
+        return edit(action.all ? "" : filter.slice(0, -1));
+      case "type":
+        return edit(filter + action.text);
+    }
   }
 
   function onKeyUp(e: any) {
     if (open && mode === "hold" && isReleaseKey(shortcut, keys.realKey(e))) {
       stop(e);
-      commit();
+      if (drill) commitChat(drill.index);
+      else commit();
     }
   }
 
@@ -1737,6 +1984,7 @@ const ICONS = {
   arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
   gitBranch: '<path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>',
   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   puzzle:
     '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
 };
@@ -1900,6 +2148,14 @@ const CSS = `
   display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline;
   width: auto; padding: 10px 12px; border-radius: 12px; border: 1px solid transparent;
 }
+/* The chats header: which workspace, and the way back. */
+.pws-drill {
+  display: flex; align-items: center; gap: 10px; box-sizing: border-box; flex: 0 0 auto;
+  height: 44px; padding: 0 18px; min-width: 0; cursor: pointer;
+  border-bottom: 1px solid var(--pws-border); color: var(--pws-fg); font-size: 14px;
+}
+.pws-drill-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pws-drill-count { margin-left: auto; flex: 0 0 auto; color: var(--pws-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .pws-row.pws-selected {
   background: color-mix(in srgb, var(--pws-run) 12%, transparent);
   border-color: color-mix(in srgb, var(--pws-run) 38%, transparent);

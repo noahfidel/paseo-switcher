@@ -291,6 +291,17 @@ The one floating panel: `panel` over a 28px blur, a 1px `border` edge, the sheet
 - **Line 2, right:** tabular facts in a fixed order, each omitted when it does not apply: PR (icon + `#N`), checks as one icon (check in `finished-green`, clock in `waiting-amber`, x in `failed-red`; only while the PR is open or draft), the diff as one green `+N` and red `−N` pair, and unpushed commits (up arrow + count). Plugin screens show none.
 - **States:** hover moves the selection (no separate hover style), a click commits. The selected row takes a `running-blue` tint, 12% fill and 38% border, over 90ms.
 
+### Chats of a workspace
+
+→ on a workspace row (↓ on a thumbnail card) replaces the list in place with that workspace's chats; ← (or a click on the header) goes back with the selection on the same workspace and its filter as it was. Plugin screens have no chats, so → does nothing there. Chats only: Paseo has no route that focuses a terminal tab.
+
+- **Header:** a 44px bar with a bottom rule: a ← keycap, the workspace name in 600 14px, and a right-aligned muted tabular count ("1 chat", "3 chats"; empty while loading). Under it the query header, once there is a query.
+- **Chat row:** the list row's grid with one line: the Lucide `message-square` in the muted lead slot, the chat's title (Paseo's "New agent" when it has none) with marked letters when filtering, and on the right the same status mark and label as a workspace row, from Paseo's own bucket for the chat (permission pending: Needs input; error: Failed; running: Running, timed from the turn's start; finished and not looked at: Finished; else "1h ago" from its last change). No facts line and no × (a chat cannot be hidden).
+- **Order:** the chat last focused in that workspace, then the rest by last change, with chats a routine, a bot's ask or the PR review watcher started after yours. Archived and internal chats are left out.
+- **Always a list,** in the Thumbnails layout too.
+- **States:** "Loading chats" with a spinner; "No chats in this workspace" / "Enter opens the workspace."; "No chat matches “x”" / "Chat titles are searched."
+- **Commit:** Enter, releasing the held modifier or a click opens the chat through the workspace route with `?open=agent:<id>`, and remembers it as that workspace's last focused chat.
+
 ### Thumbnail card
 
 A 15px-cornered card with a thumbnail framed by a 1px hairline at 9px corners. The thumbnail ground is the workspace's own surface colour. Below come the title (status mark + name, two lines at most) and a meta line (project · branch, then the diff). Before a raster exists, or when it was taken in the other theme, a placeholder shows the project name in muted text (the screen's icon, else a puzzle, for a plugin screen; the bot's avatar above the project name for a bot workspace) and "No preview yet".
@@ -317,12 +328,13 @@ It appears only once there is a query: a 48px `solid` bar with a bottom rule, a 
 
 A `solid` pill under the sheet that lists only the keys that work right now:
 
-- Holding: Ctrl "release to switch", Shift Tab "back", ⌫ "hide from switcher", Esc "cancel", then muted "Type to filter".
-- Opened from the Command Center: Enter "switch", arrows "move", ⌫ "hide from switcher", Esc "close", "Type to filter".
-- Filtering: Enter "switch", arrows "move", Esc "clear".
+- Holding: Ctrl "release to switch", Shift Tab "back", → "chats", ⌫ "hide from switcher", Esc "cancel", then muted "Type to filter".
+- Opened from the Command Center: Enter "switch", arrows "move", → "chats", ⌫ "hide from switcher", Esc "close", "Type to filter".
+- Filtering: Enter "switch", arrows "move", → "chats", Esc "clear".
 - No match: Backspace "edit", Esc "clear".
+- In a workspace's chats, holding: Ctrl "release to open", Shift Tab "back", ← "workspaces", Esc "cancel", "Type to filter"; otherwise Enter "open", ↑↓ "move", ← "workspaces", Esc "close", "Type to filter"; filtering and no match as above with "open" for "switch".
 
-Arrows are ↑↓ in the list and ←→ in the strip. Keycaps are 18px tall, at least 18px wide, with 5px corners, a `key` face, a `border` edge and a 1px lip. In the hint they use ink; on rows and cards they use muted.
+Arrows are ↑↓ in the list and ←→ in the strip, where "chats" is ↓. "chats" is left out when only plugin screens are listed. Keycaps are 18px tall, at least 18px wide, with 5px corners, a `key` face, a `border` edge and a 1px lip. In the hint they use ink; on rows and cards they use muted.
 
 ### States
 

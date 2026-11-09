@@ -43,8 +43,12 @@ paseo plugin install paseo-switcher
 | Release Cmd | Switch to the selected workspace |
 | Quick Cmd+` | Go straight back to the previous workspace |
 | Arrows, Enter | Move and switch |
-| Type | Filter all workspaces; the switcher then stays open until Enter or a click |
+| → (↓ in Thumbnails) | Show the selected workspace's chats; move, then release Cmd or press Enter to open one |
+| ← | Back from the chats to the workspaces |
+| Type | Filter all workspaces (or, in a workspace's chats, its chat titles); the switcher then stays open until Enter or a click |
 | Esc | Clear the filter, then cancel |
+
+A workspace's chats are listed with the one you last had open there first, then by last change, with chats a routine or bot started after yours. Each shows its title and its status, in the words Paseo's sidebar uses. Only chats are listed: Paseo cannot open a terminal tab from a link.
 
 The keys above are for the default shortcut, **Cmd+`**. Choose **Ctrl+Tab**, **Option+Tab** or **Ctrl+`** under Settings; the modifier you hold and release is then Ctrl or Option. Paseo uses Ctrl+` itself (Toggle Explorer sidebar), so pick Ctrl+` only if you have unbound that.
 

@@ -523,6 +523,81 @@ async function listLayout(page) {
   await boot(page);
 }
 
+/** → on a workspace shows its chats in place; ← goes back; releasing opens the chosen chat. */
+async function drillIn(page) {
+  const view = () =>
+    page.evaluate(() => {
+      const header = document.querySelector(".pws-drill-name");
+      const rows = [...document.querySelectorAll(".pws-card")];
+      return {
+        drilled: Boolean(header),
+        name: header?.textContent ?? null,
+        chats: rows.filter((r) => r.classList.contains("pws-chat")).map((r) => r.dataset.agent),
+        selected: rows.findIndex((r) => r.classList.contains("pws-selected")),
+        selectedName: rows.find((r) => r.classList.contains("pws-selected"))?.getAttribute("aria-label") ?? null,
+        onScreen: (rows.find((r) => r.classList.contains("pws-selected"))?.dataset.key ?? "").startsWith("plugin-screen|"),
+        hint: document.querySelector(".pws-hint")?.textContent ?? "",
+      };
+    });
+
+  await page.evaluate(() => localStorage.setItem("paseo-switcher:layout", '"list"'));
+  await boot(page);
+  await holdOpen(page);
+  // Earlier suites visit the settings screen; start from a workspace, since a screen has no chats.
+  for (let i = 0; i < 9 && (await view()).onScreen; i++) await page.keyboard.press("ArrowDown");
+  const top = await view();
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(1200);
+  const inside = await view();
+  check(
+    "D1",
+    "List: → shows the selected workspace's chats under its name, first one selected",
+    inside.drilled && inside.name === top.selectedName && (inside.chats.length === 0 || inside.selected === 0) && /workspaces/.test(inside.hint),
+    { top: top.selectedName, inside },
+  );
+  await page.screenshot({ path: join(ARTIFACTS, "drill-list.png") });
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForTimeout(300);
+  const back = await view();
+  check("D2", "← returns to the workspaces with the same one selected", !back.drilled && back.selected === top.selected, { back, was: top.selected });
+
+  // Open the second chat (or the only one) of a workspace by releasing the modifier.
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(1200);
+  const again = await view();
+  if (again.chats.length) {
+    const pick = again.chats.length > 1 ? 1 : 0;
+    if (pick) await page.keyboard.press("ArrowDown");
+    const target = again.chats[pick];
+    await page.keyboard.up("Control");
+    await page.waitForTimeout(2000);
+    const tab = await page.evaluate(() => {
+      const key = location.pathname.match(/workspace\/([^/?#]+)/)?.[1];
+      const pane = key && document.querySelector('[data-testid^="workspace-deck-entry-"][data-testid$=":' + key + '"]');
+      const sel = pane?.querySelector('[data-testid^="workspace-tab-agent_"][aria-selected="true"]');
+      return sel?.getAttribute("data-testid")?.replace("workspace-tab-agent_", "") ?? null;
+    });
+    check("D3", "Releasing the modifier opens the chosen chat in its workspace", tab === target, { target, tab });
+  } else {
+    await page.keyboard.press("Escape");
+    await page.keyboard.up("Control");
+    info("D3", "The workspace has no chats; opening one was not checked", again);
+  }
+
+  await page.evaluate(() => localStorage.setItem("paseo-switcher:layout", '"strip"'));
+  await boot(page);
+  await holdOpen(page);
+  await page.keyboard.press("ArrowRight");
+  const moved = await view();
+  for (let i = 0; i < 9 && (await view()).onScreen; i++) await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(1200);
+  const stripInside = await view();
+  check("D4", "Thumbnails: → still moves, ↓ shows the chats as a list", !moved.drilled && stripInside.drilled, { moved, stripInside });
+  await page.keyboard.press("Escape");
+  await page.keyboard.up("Control");
+}
+
 async function visuals(page) {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.waitForTimeout(800);
@@ -791,6 +866,7 @@ async function main() {
     await collapsedSidebar(page);
     await settings(page);
     await listLayout(page);
+    await drillIn(page);
     await visuals(page);
     await perf(page, context);
     await paseoShortcuts(page);

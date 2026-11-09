@@ -115,19 +115,28 @@ export interface RowFacts {
 
 const STATUS_WORD = { running: "Running", needs_input: "Needs input", failed: "Failed", attention: "Finished" } as const;
 
+function idleLabel(at: number | undefined, now: number): string | null {
+  const since = ago(at, now);
+  return since === null ? null : since === "now" ? "just now" : `${since} ago`;
+}
+
+/** A row's status label: "Running · 4m" while something is going on, else "1h ago". Shared by workspace and chat rows. */
+function stateLabel(state: RowState, statusAt: number | undefined, activityAt: number | undefined, now: number): string | null {
+  if (state === "done") return idleLabel(activityAt, now);
+  const since = ago(statusAt || activityAt, now);
+  const word = STATUS_WORD[state];
+  return since ? `${word} · ${since}` : word;
+}
+
 export function rowFacts(
   info: WorkspaceInfo | null,
   now: number,
   screen?: { screen: ScreenStop; visitedAt?: number },
 ): RowFacts {
-  const idleLabel = (at: number | undefined) => {
-    const since = ago(at, now);
-    return since === null ? null : since === "now" ? "just now" : `${since} ago`;
-  };
   if (!info) {
     return {
       state: "done",
-      label: idleLabel(screen?.visitedAt),
+      label: idleLabel(screen?.visitedAt, now),
       project: screen ? prettifyPluginId(screen.screen.pluginId) : null,
       branch: null,
       hidden: false,
@@ -138,14 +147,7 @@ export function rowFacts(
     };
   }
   const state = info.status;
-  let label: string | null;
-  if (state === "done") {
-    label = idleLabel(info.activityAt);
-  } else {
-    const since = ago(info.statusAt || info.activityAt, now);
-    const word = STATUS_WORD[state];
-    label = since ? `${word} · ${since}` : word;
-  }
+  const label = stateLabel(state, info.statusAt, info.activityAt, now);
   const pr = info.pr ?? null;
   const live = pr && (pr.state === "open" || pr.state === "draft");
   return {
@@ -696,6 +698,124 @@ export interface AgentInfo {
   automated?: boolean;
   /** The paseo-bots bot this chat is with (label `paseo-bots.bot`). */
   botId?: string | null;
+  /** The chat's title as Paseo shows it on its tab; null before one is set. */
+  title?: string | null;
+  /** Paseo's status bucket for the chat, as its sidebar derives it. */
+  status?: RowState;
+  /** When the chat entered that status (the running turn's start, or the attention time). */
+  statusAt?: number;
+}
+
+// ---- chats in a workspace (the drill-in list) ------------------------------------------------------
+
+/** What Paseo calls a chat that has no title yet (its tab says the same). */
+export const UNTITLED_CHAT = "New agent";
+
+/** Paseo's own status bucket for one agent (its `deriveAgentStateBucket`), first match wins. */
+export function agentStateBucket(agent: {
+  status?: string | null;
+  pendingPermissionCount?: number;
+  requiresAttention?: boolean | null;
+  attentionReason?: string | null;
+}): RowState {
+  if ((agent.pendingPermissionCount ?? 0) > 0 || agent.attentionReason === "permission") return "needs_input";
+  if (agent.status === "error" || agent.attentionReason === "error") return "failed";
+  if (agent.status === "running") return "running";
+  if (agent.requiresAttention) return "attention";
+  return "done";
+}
+
+export function chatTitle(agent: AgentInfo): string {
+  return agent.title?.trim() || UNTITLED_CHAT;
+}
+
+/** A chat row's status mark and label, in the same words a workspace row uses. */
+export function chatFacts(agent: AgentInfo, now: number): { state: RowState; label: string | null } {
+  const state = agent.status ?? "done";
+  return { state, label: stateLabel(state, agent.statusAt, agent.activityAt, now) };
+}
+
+/**
+ * A workspace's chats in the order the drill-in list shows them: the chat you last had open there
+ * first, then the rest by latest activity, with automated chats (routines, asks) after yours.
+ */
+export function chatsForWorkspace(agents: readonly AgentInfo[] | null | undefined, workspaceId: string, rememberedId: string | null | undefined): AgentInfo[] {
+  if (!agents) return [];
+  const rank = (a: AgentInfo) => (a.id === rememberedId ? 0 : a.automated ? 2 : 1);
+  return agents
+    .filter((a) => a.workspaceId === workspaceId)
+    .sort((a, b) => rank(a) - rank(b) || b.activityAt - a.activityAt);
+}
+
+/** Chats whose title contains every word of the query, in the order given. */
+export function filterChats(chats: readonly AgentInfo[], query: string): AgentInfo[] {
+  const words = queryWords(query);
+  if (!words.length) return [...chats];
+  return chats.filter((chat) => {
+    const title = chatTitle(chat).toLowerCase();
+    return words.every((w) => title.includes(w));
+  });
+}
+
+// ---- keys while the switcher is open ---------------------------------------------------------------
+
+export interface KeyState {
+  /** The layout on show (a narrow window shows the list). */
+  layout: Layout;
+  /** Showing one workspace's chats instead of the workspaces. */
+  drilled: boolean;
+  /** The filter of the level on show. */
+  query: string;
+  /** The selected row is a workspace (plugin screens have no chats). */
+  canDrill: boolean;
+  /** Some row is selected. */
+  hasSelection: boolean;
+  /** The switcher's own modifier is Cmd, so keys typed with it held still filter. */
+  metaTypes: boolean;
+}
+
+export type KeyAction =
+  | { type: "move"; delta: 1 | -1 }
+  | { type: "drill" }
+  | { type: "back" }
+  | { type: "commit" }
+  | { type: "cancel" }
+  | { type: "clear" }
+  | { type: "hide" }
+  | { type: "erase"; all: boolean }
+  | { type: "type"; text: string }
+  | { type: "none" };
+
+/**
+ * What a key does while the switcher is open (the switcher's own shortcut is handled before this).
+ * The list drills in with →; the thumbnails strip keeps ← → for moving and drills in with ↓.
+ * Inside a workspace's chats, ↑ ↓ move and ← goes back to the workspaces.
+ */
+export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; altKey: boolean; metaKey: boolean }): KeyAction {
+  const move = (delta: 1 | -1): KeyAction => ({ type: "move", delta });
+  const drill: KeyAction = s.canDrill ? { type: "drill" } : { type: "none" };
+  switch (key) {
+    case "Escape":
+      return s.query ? { type: "clear" } : { type: "cancel" };
+    case "Enter":
+      return { type: "commit" };
+    case "ArrowUp":
+      return move(-1);
+    case "ArrowDown":
+      return s.drilled || s.layout === "list" ? move(1) : drill;
+    case "ArrowLeft":
+      return s.drilled ? { type: "back" } : move(-1);
+    case "ArrowRight":
+      if (s.drilled) return { type: "none" };
+      return s.layout === "list" ? drill : move(1);
+    case "Backspace":
+      // With nothing typed, Backspace hides the selected workspace; a chat is never hidden.
+      if (!s.query && s.drilled) return { type: "none" };
+      if (!s.query && s.hasSelection) return { type: "hide" };
+      return { type: "erase", all: mods.ctrlKey || mods.altKey };
+  }
+  if (key.length === 1 && (!mods.metaKey || s.metaTypes) && (s.query || key !== " ")) return { type: "type", text: key };
+  return { type: "none" };
 }
 
 /** Label paseo-bots puts on a chat with a bot; its value is the bot's id. */

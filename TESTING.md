@@ -4,7 +4,7 @@ Two layers:
 
 | Command | What it covers | Needs |
 | --- | --- | --- |
-| `npm run verify` | Typecheck (client, and the daemon side with Node types) and unit tests: ordering and icons (`test/model.test.ts`, `test/icons.test.ts`, `test/screen-icons.test.ts`), the repo icon lookup against temporary repos with a fake fetch, and the RPC contracts (`test/repo-icons.test.ts`) | Nothing |
+| `npm run verify` | Typecheck (client, and the daemon side with Node types) and unit tests: ordering and icons (`test/model.test.ts`, `test/icons.test.ts`, `test/screen-icons.test.ts`), a workspace's chats and the keys (`test/chats.test.ts`), the repo icon lookup against temporary repos with a fake fetch, and the RPC contracts (`test/repo-icons.test.ts`) | Nothing |
 | `npm run e2e` | Behavior and performance in Paseo's real web UI, against your local daemon (`test/e2e/run.mjs`) | A running daemon with this plugin installed |
 
 Run `npm run e2e -- --reload` before a release. It also reloads the plugin with `paseo plugin reload paseo-switcher` and checks that it cleans up after itself. Add `--headed` to watch the browser if you have a display.
@@ -89,6 +89,17 @@ The run takes about four minutes. It prints a PASS/FAIL line per check, writes `
 | L6 | Opening the list takes under 30 ms with under 200 elements; moving takes under 5 ms |
 | L7 | In the list layout, no thumbnail snapshots run in the background |
 | L8 | Screenshots: `list-light.png`, `list-dark.png`, `list-900.png`, `list-440.png` |
+
+**Chats of a workspace (D)**
+
+| ID | Check |
+| --- | --- |
+| D1 | In the list, → shows the selected workspace's chats under its name, the first one selected, with "workspaces" in the hint (`drill-list.png`) |
+| D2 | ← returns to the workspaces with the same one selected |
+| D3 | Releasing Ctrl on a chat opens that chat's tab in its workspace (informational when the workspace has no chats) |
+| D4 | In Thumbnails, → still moves between cards and ↓ shows the chats as a list |
+
+Manual: typing filters chat titles and Esc clears, then closes; Backspace edits the filter and never hides a chat; → on a plugin screen does nothing; a workspace with no chats says so and Enter opens the workspace; a running chat shows "Running · Nm", one waiting on a permission "Needs input"; opening a chat in the workspace you are already in switches its tab.
 
 **Visual (V):** the strip fits a 900px window. Screenshots in light, dark, narrow, and limit-3 layouts land in `test/artifacts/` for a human look.
 
