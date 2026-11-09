@@ -148,6 +148,8 @@ function fakeApi(
           .map((path) => path.split("/"))
           .filter(([ws]) => !options.workspaceId || ws === options.workspaceId)
           .map(([workspaceId, id]) => ({ id, workspaceId, cwd: "/tmp", name: `shell ${id}` }));
+        // Terminals no workspace owns come back from any query, as a host may return them.
+        for (const id of opts.unowned ?? []) entries.push({ id, workspaceId: "", cwd: "/tmp", name: `shell ${id}` });
         return { entries, requestId: "r" };
       },
       ref: (id: string) => ({
@@ -685,6 +687,21 @@ test("a terminal list that lands after the background setting changed still sett
     await tick(30);
     const texts = page.texts();
     assert.ok(texts.includes("shell t1"), texts.slice(-12).join("|"));
+    assert.ok(texts.includes("1 session"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("a terminal no workspace owns is never listed under the workspace on show", async () => {
+  const { page, switcher } = await openWithChats([], ["t1"], { unowned: ["stray"] });
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    const texts = page.texts();
+    assert.ok(texts.includes("shell t1"));
+    assert.ok(!texts.includes("shell stray"));
     assert.ok(texts.includes("1 session"));
   } finally {
     switcher.dispose();

@@ -1058,8 +1058,9 @@ function createSwitcher(installs: Installation[]): Switcher {
         if (disposed) return false;
         const list: TerminalInfo[] = [];
         for (const t of result.entries) {
-          if (archiving.has(`terminal:${t.id}`)) continue;
-          list.push({ id: t.id, workspaceId: t.workspaceId || workspaceId, name: t.name ?? "" });
+          // Only the workspace's own terminals; one no workspace owns is never assigned to this one.
+          if (t.workspaceId !== workspaceId || archiving.has(`terminal:${t.id}`)) continue;
+          list.push({ id: t.id, workspaceId: t.workspaceId, name: t.name ?? "" });
         }
         terminalLists.set(key, list);
         return settle(true);
