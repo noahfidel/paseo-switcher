@@ -90,6 +90,11 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
   };
   return {
     keydown: () => listeners.get("keydown")?.size ?? 0,
+    /** Sends a keydown to every listener, as the browser would. */
+    press: (event: Record<string, unknown>) => {
+      const e = { preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {}, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...event };
+      for (const fn of [...(listeners.get("keydown") ?? [])]) (fn as (e: unknown) => void)(e);
+    },
     store,
     /** Every text the switcher has drawn so far. */
     texts: () => created.map((n) => n.textContent).filter((t): t is string => typeof t === "string"),
@@ -119,12 +124,22 @@ function fakeApi(host: string, ids: string[], calls: string[], gate?: () => Prom
         if (gate) await gate();
         return listing(host, ids);
       },
+      archive: async (id: string) => {
+        calls.push(`${host}:archive:${id}`);
+        return { requestId: "r", workspaceId: id, archivedAt: "2026-11-09T00:00:00Z", error: null };
+      },
     },
     agents: {
       list: async () => {
         calls.push(`${host}:agents`);
         return { entries: [], pageInfo: { hasMore: false } };
       },
+      ref: (id: string) => ({
+        archive: async () => {
+          calls.push(`${host}:archive-chat:${id}`);
+          return { archivedAt: "2026-11-09T00:00:00Z" };
+        },
+      }),
     },
   };
 }
@@ -386,6 +401,70 @@ test("without the SDK's host lookup and with several installations, no installat
     assert.deepEqual(calls.filter((c) => c.endsWith(":workspaces")), []);
     a.dispose();
     b.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("⌫ archives the selected workspace through its own host's API, after a second press, and the row goes at once", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
+  try {
+    const calls: string[] = [];
+    const apis: Record<string, any> = { srv_a: fakeApi("srv_a", ["wks_a0"], calls), srv_b: fakeApi("srv_b", ["wks_b1"], calls) };
+    const getPaseoClient = (serverId: string) => apis[serverId];
+    const switcher = installSwitcher(fakeApi("own", ["wrong"], calls), { getPaseoClient });
+    await tick(20);
+    // Open with the shortcut (the previous workspace, on the other host, is selected), then ⌫ with Cmd held.
+    page.press({ key: "`", code: "Backquote", metaKey: true });
+    page.press({ key: "Backspace", code: "Backspace", metaKey: true });
+    await tick(10);
+    assert.deepEqual(calls.filter((c) => c.includes("archive")), [], "the first ⌫ only arms");
+    page.press({ key: "Backspace", code: "Backspace", metaKey: true });
+    await tick(20);
+    assert.deepEqual(calls.filter((c) => c.includes("archive")), ["srv_b:archive:wks_b1"]);
+    assert.ok(!calls.includes("own:archive:wks_b1"));
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a key between the two ⌫ presses disarms, so the next ⌫ arms again", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
+  try {
+    const calls: string[] = [];
+    const apis: Record<string, any> = { srv_a: fakeApi("srv_a", ["wks_a0"], calls), srv_b: fakeApi("srv_b", ["wks_b1"], calls) };
+    const switcher = installSwitcher(fakeApi("own", [], calls), { getPaseoClient: (serverId: string) => apis[serverId] });
+    await tick(20);
+    page.press({ key: "`", code: "Backquote", metaKey: true });
+    page.press({ key: "Backspace", code: "Backspace", metaKey: true });
+    page.press({ key: "ArrowDown", code: "ArrowDown", metaKey: true });
+    page.press({ key: "ArrowUp", code: "ArrowUp", metaKey: true });
+    page.press({ key: "Backspace", code: "Backspace", metaKey: true });
+    await tick(20);
+    assert.deepEqual(calls.filter((c) => c.includes("archive")), []);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("⇧⌫ hides the selected workspace instead of archiving it", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
+  try {
+    const calls: string[] = [];
+    const apis: Record<string, any> = { srv_a: fakeApi("srv_a", ["wks_a0"], calls), srv_b: fakeApi("srv_b", ["wks_b1"], calls) };
+    const switcher = installSwitcher(fakeApi("own", [], calls), { getPaseoClient: (serverId: string) => apis[serverId] });
+    await tick(20);
+    page.press({ key: "`", code: "Backquote", metaKey: true });
+    page.press({ key: "Backspace", code: "Backspace", metaKey: true, shiftKey: true });
+    await tick(20);
+    assert.deepEqual(calls.filter((c) => c.includes("archive")), []);
+    assert.deepEqual(JSON.parse(page.store.get("paseo-switcher:hidden") ?? "[]"), ["srv_b:wks_b1"]);
+    switcher.dispose();
   } finally {
     cleanGlobals();
   }

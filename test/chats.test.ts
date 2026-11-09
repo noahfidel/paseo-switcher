@@ -3,7 +3,9 @@ import { test } from "node:test";
 import {
   UNTITLED_CHAT,
   agentStateBucket,
+  archiveError,
   canDrillInto,
+  chatArchiveNeedsConfirm,
   chatCountLabel,
   chatFacts,
   chatListState,
@@ -11,9 +13,11 @@ import {
   chatsForWorkspace,
   filterChats,
   keyAction,
+  nextArmed,
   rowFacts,
   type AgentInfo,
   type Card,
+  type KeyAction,
   type KeyState,
 } from "../client/model.ts";
 
@@ -120,9 +124,9 @@ test("chatCountLabel says 'recent' when the host's agent list was cut off, since
 
 // ---- keys -----------------------------------------------------------------------------------------
 
-const base: KeyState = { layout: "list", drilled: false, query: "", canDrill: true, hasSelection: true, metaTypes: true };
-const press = (key: string, state: Partial<KeyState> = {}, mods: { ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } = {}) =>
-  keyAction(key, { ...base, ...state }, { ctrlKey: false, altKey: false, metaKey: false, ...mods });
+const base: KeyState = { layout: "list", drilled: false, query: "", canDrill: true, hasSelection: true, metaTypes: true, screen: false, busy: false, armed: false };
+const press = (key: string, state: Partial<KeyState> = {}, mods: { ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; shiftKey?: boolean } = {}) =>
+  keyAction(key, { ...base, ...state }, { ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });
 
 test("list layout: → opens a workspace's chats; ↑ ↓ ← move; → on a plugin screen does nothing", () => {
   assert.deepEqual(press("ArrowRight"), { type: "drill" });
@@ -160,13 +164,73 @@ test("Enter commits, Esc clears a filter before it cancels, at either level", ()
   assert.deepEqual(press("Escape", { drilled: true, query: "x" }), { type: "clear" });
 });
 
-test("Backspace hides a workspace with nothing typed, edits a filter, and never hides a chat", () => {
-  assert.deepEqual(press("Backspace"), { type: "hide" });
+test("Backspace edits the filter and erases all with Ctrl or Alt, whatever level is on show", () => {
   assert.deepEqual(press("Backspace", { hasSelection: false }), { type: "erase", all: false });
-  assert.deepEqual(press("Backspace", { query: "ab" }), { type: "erase", all: false });
-  assert.deepEqual(press("Backspace", { query: "ab" }, { altKey: true }), { type: "erase", all: true });
-  assert.deepEqual(press("Backspace", { drilled: true }), { type: "none" });
-  assert.deepEqual(press("Backspace", { drilled: true, query: "ab" }), { type: "erase", all: false });
+  for (const drilled of [false, true]) {
+    assert.deepEqual(press("Backspace", { query: "ab", drilled }), { type: "erase", all: false });
+    assert.deepEqual(press("Backspace", { query: "ab", drilled }, { altKey: true }), { type: "erase", all: true });
+    assert.deepEqual(press("Backspace", { query: "ab", drilled }, { ctrlKey: true }), { type: "erase", all: true });
+    // With text typed, even an armed row is not archived.
+    assert.deepEqual(press("Backspace", { query: "ab", drilled, armed: true }), { type: "erase", all: false });
+  }
+});
+
+test("⌫ on a workspace arms it, and a second ⌫ on the same armed row archives it", () => {
+  assert.deepEqual(press("Backspace"), { type: "arm" });
+  assert.deepEqual(press("Backspace", { armed: true }), { type: "archive" });
+  // Hold mode keeps Ctrl down; modifiers other than Shift change nothing.
+  assert.deepEqual(press("Backspace", {}, { ctrlKey: true }), { type: "arm" });
+  assert.deepEqual(press("Backspace", { armed: true }, { ctrlKey: true, metaKey: true, altKey: true }), { type: "archive" });
+});
+
+test("⌫ on a plugin screen hides it, as ⇧⌫ does", () => {
+  assert.deepEqual(press("Backspace", { screen: true }), { type: "hide" });
+  assert.deepEqual(press("Backspace", { screen: true, armed: true }), { type: "hide" });
+});
+
+test("⇧⌫ hides a workspace or screen, with or without Ctrl held, and does nothing on a chat", () => {
+  assert.deepEqual(press("Backspace", {}, { shiftKey: true }), { type: "hide" });
+  assert.deepEqual(press("Backspace", { screen: true }, { shiftKey: true, ctrlKey: true }), { type: "hide" });
+  assert.deepEqual(press("Backspace", { armed: true }, { shiftKey: true }), { type: "hide" });
+  assert.deepEqual(press("Backspace", { drilled: true }, { shiftKey: true }), { type: "none" });
+  assert.deepEqual(press("Backspace", { drilled: true, busy: true, armed: true }, { shiftKey: true }), { type: "none" });
+  // With a filter typed, Shift+⌫ still edits it.
+  assert.deepEqual(press("Backspace", { query: "ab" }, { shiftKey: true }), { type: "erase", all: false });
+});
+
+test("⌫ on a chat archives an idle chat at once and a busy one on the second press", () => {
+  const chats = { drilled: true };
+  assert.deepEqual(press("Backspace", chats), { type: "archive" });
+  assert.deepEqual(press("Backspace", { ...chats, busy: true }), { type: "arm" });
+  assert.deepEqual(press("Backspace", { ...chats, busy: true, armed: true }), { type: "archive" });
+  assert.deepEqual(press("Backspace", { ...chats, busy: true }, { ctrlKey: true }), { type: "arm" });
+});
+
+test("⌫ with nothing selected does nothing to rows", () => {
+  assert.deepEqual(press("Backspace", { hasSelection: false }), { type: "erase", all: false });
+  assert.deepEqual(press("Backspace", { drilled: true, hasSelection: false }), { type: "none" });
+});
+
+test("a chat needs a second ⌫ only while it is running or waiting on input", () => {
+  const chat = (status?: AgentInfo["status"]): AgentInfo => ({ id: "a", workspaceId: "w", activityAt: 1, status });
+  assert.equal(chatArchiveNeedsConfirm(chat("running")), true);
+  assert.equal(chatArchiveNeedsConfirm(chat("needs_input")), true);
+  for (const status of ["done", "attention", "failed", undefined] as const) assert.equal(chatArchiveNeedsConfirm(chat(status)), false);
+});
+
+test("an armed row stays armed only for the arm action; every other key, even an ignored one, disarms", () => {
+  assert.equal(nextArmed("k1", "k2", { type: "arm" }), "k2");
+  assert.equal(nextArmed(null, "k1", { type: "arm" }), "k1");
+  for (const type of ["move", "drill", "back", "commit", "cancel", "clear", "hide", "erase", "type", "none", "archive"] as const) {
+    assert.equal(nextArmed("k1", "k1", { type } as KeyAction), null, type);
+  }
+});
+
+test("a failed archive says so briefly", () => {
+  assert.equal(archiveError(new Error("daemon said no")), "Couldn't archive: daemon said no");
+  assert.equal(archiveError("plain"), "Couldn't archive: plain");
+  assert.equal(archiveError(undefined), "Couldn't archive");
+  assert.equal(archiveError(new Error("x".repeat(200))).length <= 80, true);
 });
 
 test("printable keys type into the filter of the level on show", () => {

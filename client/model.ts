@@ -915,6 +915,12 @@ export interface KeyState {
   hasSelection: boolean;
   /** The switcher's own modifier is Cmd, so keys typed with it held still filter. */
   metaTypes: boolean;
+  /** The selected workspace-level row is a plugin screen, which Paseo cannot archive. */
+  screen: boolean;
+  /** The selected chat is running or waiting on input, so archiving it needs a second press. */
+  busy: boolean;
+  /** The selected row was armed by a ⌫ press and has not been disarmed since. */
+  armed: boolean;
 }
 
 export type KeyAction =
@@ -925,6 +931,8 @@ export type KeyAction =
   | { type: "cancel" }
   | { type: "clear" }
   | { type: "hide" }
+  | { type: "arm" }
+  | { type: "archive" }
   | { type: "erase"; all: boolean }
   | { type: "type"; text: string }
   | { type: "none" };
@@ -934,7 +942,7 @@ export type KeyAction =
  * The list drills in with →; the thumbnails strip keeps ← → for moving and drills in with ↓.
  * Inside a workspace's chats, ↑ ↓ move and ← goes back to the workspaces.
  */
-export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; altKey: boolean; metaKey: boolean }): KeyAction {
+export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean }): KeyAction {
   const move = (delta: 1 | -1): KeyAction => ({ type: "move", delta });
   const drill: KeyAction = s.canDrill ? { type: "drill" } : { type: "none" };
   switch (key) {
@@ -952,13 +960,47 @@ export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; al
       if (s.drilled) return { type: "none" };
       return s.layout === "list" ? drill : move(1);
     case "Backspace":
-      // With nothing typed, Backspace hides the selected workspace; a chat is never hidden.
-      if (!s.query && s.drilled) return { type: "none" };
-      if (!s.query && s.hasSelection) return { type: "hide" };
-      return { type: "erase", all: mods.ctrlKey || mods.altKey };
+      // Text in the filter is edited, whatever else is held. In hold mode Ctrl is down the whole time,
+      // so only Shift changes what ⌫ does on a row.
+      if (s.query) return { type: "erase", all: mods.ctrlKey || mods.altKey };
+      if (!s.hasSelection) return s.drilled ? { type: "none" } : { type: "erase", all: mods.ctrlKey || mods.altKey };
+      if (s.drilled) {
+        // A chat is archived, never hidden; one still working asks for a second press.
+        if (mods.shiftKey) return { type: "none" };
+        return s.busy && !s.armed ? { type: "arm" } : { type: "archive" };
+      }
+      // Plugin screens cannot be archived, so ⌫ hides them like ⇧⌫. A workspace always asks twice.
+      if (mods.shiftKey || s.screen) return { type: "hide" };
+      return s.armed ? { type: "archive" } : { type: "arm" };
   }
   if (key.length === 1 && (!mods.metaKey || s.metaTypes) && (s.query || key !== " ")) return { type: "type", text: key };
   return { type: "none" };
+}
+
+/** A chat that is working or waiting for you is archived on a second ⌫; any other is archived at once. */
+export function chatArchiveNeedsConfirm(chat: AgentInfo): boolean {
+  return chat.status === "running" || chat.status === "needs_input";
+}
+
+/**
+ * Which row is armed after a key: only the arm action arms (the selected row); every other key, even
+ * one that does nothing, disarms. A timeout disarms too, in the switcher.
+ */
+export function nextArmed(current: string | null, selected: string | null, action: KeyAction): string | null {
+  return action.type === "arm" ? selected : null;
+}
+
+/** How long an armed row waits for its second ⌫, and how long a failure shows in the hint line. */
+export const ARM_MS = 4000;
+export const ARCHIVE_ERROR_MS = 3000;
+
+/** The hint-line text for a failed archive, kept short. */
+export function archiveError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const message = raw.replace(/\s+/g, " ").trim();
+  if (!message) return "Couldn't archive";
+  const text = `Couldn't archive: ${message}`;
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text;
 }
 
 /** Label paseo-bots puts on a chat with a bot; its value is the bot's id. */

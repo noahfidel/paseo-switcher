@@ -8,7 +8,7 @@ Arc-style workspace switching for the Paseo desktop app. Hold Cmd and tap ` (the
 - → on a workspace (↓ in the Thumbnails layout) lists its chats in place: the one you last had open there first, then by last change, each with its status. Move as usual, then release the modifier, press Enter or click to open that chat; ← goes back to the workspaces. Terminals are not listed, since Paseo cannot open a terminal tab from a link.
 - Typing filters all workspaces (or a workspace's chats by title) and keeps the switcher open until Enter or a click; Esc clears the filter
 - Hovering a row selects it and clicking switches to it
-- Backspace with nothing typed, or the × on a hovered row, hides that workspace or plugin screen from the switcher (see below)
+- ⌫ with nothing typed archives the selected workspace in Paseo, after a second ⌫ to confirm (see below); on a plugin screen, which Paseo cannot archive, it hides the screen instead. ⇧⌫, or the × on a hovered row, hides a workspace or plugin screen from the switcher (see below). Inside a workspace's chats, ⌫ archives the selected chat; a chat that is running or needs input asks for a second ⌫ first, and the × on a hovered chat archives it with the same rule. With text typed, ⌫ erases it (Ctrl or Alt erases it all)
 
 The Command Center also has **Switch workspace (Cmd+`)**, which (its title shows the shortcut you chose) opens the same switcher and waits for Enter or a click. Use it in a browser tab, where the browser keeps Ctrl+Tab for itself, or in a phone browser, where a tap switches.
 
@@ -26,7 +26,9 @@ The Command Center also has **Switch workspace (Cmd+`)**, which (its title shows
 
 A workspace shows the avatar of the paseo-bots bot behind its most recently active chat that carries a bot label (bot workspaces hold only bot chats) in place of its repo icon, branch or folder icon. Bot avatars appear when paseo-bots is installed and enabled; without it nothing changes.
 
-**Hidden from switcher.** Hiding a row (Backspace with nothing typed, or the × on hover) means it is no longer listed, never cycled to by the shortcut or the quick tap, and records no visits, including messages. Typing a filter still finds hidden workspaces, and visiting one does not unhide it. Settings shows a **Hidden from switcher** section, only while something is hidden, with an **Unhide** button for each. (This is separate from the "hidden" tag, which marks workspaces Paseo hides from its sidebar.)
+**Archiving.** The first ⌫ on a workspace marks it in red and the hint says "⌫ again to archive"; a second ⌫ on that row archives it in Paseo, which for a worktree workspace removes its folder. Moving, typing, any other key or four seconds disarms it. The row goes at once and the selection stays on the same place; if Paseo refuses, the row comes back and the hint line says why for a few seconds. Archiving goes through the host the workspace or chat belongs to. When a workspace's last chat is archived, the list returns to the workspaces.
+
+**Hidden from switcher.** Hiding a row (⇧⌫, or the × on hover) means it is no longer listed, never cycled to by the shortcut or the quick tap, and records no visits, including messages. Typing a filter still finds hidden workspaces, and visiting one does not unhide it. Settings shows a **Hidden from switcher** section, only while something is hidden, with an **Unhide** button for each. (This is separate from the "hidden" tag, which marks workspaces Paseo hides from its sidebar.)
 
 Switching to a workspace that has no sidebar row (a hidden one, or one in a collapsed project) reopens whichever is newer: the chat you last had open there, or the chat you last sent a message to (including one used from the Bots screen). If neither exists, it opens the most recently active chat that was not started by a routine, ask or PR review watcher. Workspaces in the sidebar open the way a sidebar click does.
 

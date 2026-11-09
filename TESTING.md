@@ -99,7 +99,7 @@ The run takes about four minutes. It prints a PASS/FAIL line per check, writes `
 | D3 | Releasing Ctrl on a chat opens that chat's tab in its workspace (informational when the workspace has no chats) |
 | D4 | In Thumbnails, → still moves between cards and ↓ shows the chats as a list |
 
-Manual: typing filters chat titles and Esc clears, then closes; Backspace edits the filter and never hides a chat; → on a plugin screen does nothing; a workspace with no chats says so and Enter opens the workspace; a running chat shows "Running · Nm", one waiting on a permission "Needs input"; opening a chat in the workspace you are already in switches its tab.
+Manual: typing filters chat titles and Esc clears, then closes; Backspace with text typed edits the filter, and ⇧⌫ never hides a chat; → on a plugin screen does nothing; a workspace with no chats says so and Enter opens the workspace; a running chat shows "Running · Nm", one waiting on a permission "Needs input"; opening a chat in the workspace you are already in switches its tab.
 
 **Visual (V):** the strip fits a 900px window. Screenshots in light, dark, narrow, and limit-3 layouts land in `test/artifacts/` for a human look.
 
@@ -131,7 +131,9 @@ P10 and P11 read the `pws:snapshot`, `pws:serialize` (with its `pws:xml` and `pw
 | K3 | Other listeners see only those two combos as an unidentified key: Shift+Tab, Cmd+Ctrl+Tab and Ctrl+A are unchanged |
 | K4 | Disposing the plugin gives the keys back |
 
-**Hiding (manual, not in `npm run e2e`):** with the switcher open and nothing typed, Backspace hides the selected row (the selection stays on the same index and the list refills); with a filter typed it edits the filter. The × on a hovered row (list and thumbnails) does the same. A hidden item is not listed or cycled to and a quick tap skips it, but a filter finds it. Settings then shows **Hidden from switcher** with **Unhide**; it disappears when empty. With an old `paseo-switcher:skipped-screens` in storage, it is moved into `paseo-switcher:hidden` and removed.
+**Hiding (manual, not in `npm run e2e`):** with the switcher open and nothing typed, ⇧⌫ hides the selected row (the selection stays on the same index and the list refills); with a filter typed it edits the filter. The × on a hovered row (list and thumbnails) does the same. A hidden item is not listed or cycled to and a quick tap skips it, but a filter finds it. Settings then shows **Hidden from switcher** with **Unhide**; it disappears when empty. With an old `paseo-switcher:skipped-screens` in storage, it is moved into `paseo-switcher:hidden` and removed.
+
+**Archiving (manual, not in `npm run e2e`; use a throwaway workspace and chat, since archiving a worktree workspace deletes its folder):** hold the shortcut, select the workspace and press ⌫ once: the row turns red and the hint reads "⌫ again to archive"; waiting 4 seconds, moving, typing or any other key clears it. Press ⌫ twice: the row goes at once, the selection stays on the same place, and Paseo's sidebar loses the workspace. On a plugin screen ⌫ hides it. In a workspace's chats, ⌫ archives an idle or finished chat at once, and a running one on the second press; the × on a hovered chat does the same. Archiving the last chat returns to the workspaces. With a second host, archive a workspace and a chat of that host and check the other host's lists are unchanged. To see a failure, stop the host's daemon with the switcher open and press ⌫ twice: the row comes back and the hint reads "Couldn't archive: …" for about 3 seconds. Unit tests cover the key logic (`test/chats.test.ts`) and that archive calls go through the owning host's API (`test/hosts.test.ts`).
 
 **Lifecycle (R, E):** after a plugin reload there is exactly one switcher, which still claims Ctrl+Tab (`--reload` only). The plugin raised no page errors.
 

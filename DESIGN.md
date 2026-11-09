@@ -336,11 +336,11 @@ It appears only once there is a query: a 48px `solid` bar with a bottom rule, a 
 
 A `solid` pill under the sheet that lists only the keys that work right now:
 
-- Holding: Ctrl "release to switch", Shift Tab "back", → "chats", ⌫ "hide from switcher", Esc "cancel", then muted "Type to filter".
-- Opened from the Command Center: Enter "switch", arrows "move", → "chats", ⌫ "hide from switcher", Esc "close", "Type to filter".
+- Holding: Ctrl "release to switch", Shift Tab "back", → "chats", ⌫ "archive", ⇧⌫ "hide", Esc "cancel", then muted "Type to filter". When only plugin screens are listed, the pair is a single ⌫ "hide".
+- Opened from the Command Center: Enter "switch", arrows "move", → "chats", ⌫ "archive", ⇧⌫ "hide", Esc "close", "Type to filter".
 - Filtering: Enter "switch", arrows "move", → "chats", Esc "clear".
 - No match: Backspace "edit", Esc "clear".
-- In a workspace's chats, holding: Ctrl "release to open", Shift Tab "back", ← "workspaces", Esc "cancel", "Type to filter"; otherwise Enter "open", ↑↓ "move", ← "workspaces", Esc "close", "Type to filter"; filtering and no match as above with "open" for "switch".
+- In a workspace's chats, holding: Ctrl "release to open", Shift Tab "back", ← "workspaces", ⌫ "archive", Esc "cancel", "Type to filter"; otherwise Enter "open", ↑↓ "move", ← "workspaces", ⌫ "archive", Esc "close", "Type to filter"; filtering and no match as above with "open" for "switch".
 
 Arrows are ↑↓ in the list and ←→ in the strip, where "chats" is ↓. "chats" is left out when only plugin screens are listed. Keycaps are 18px tall, at least 18px wide, with 5px corners, a `key` face, a `border` edge and a 1px lip. In the hint they use ink; on rows and cards they use muted.
 
@@ -357,7 +357,16 @@ The host's Settings section "Switcher" with one card holding two `SettingsSelect
 
 ### Hiding
 
-Backspace with an empty query hides the selected row; with a query it edits the query. Each row and card also has a 22px × button, shown on hover, labelled "Hide from switcher". The selection stays on its index (clamped) and the list refills up to the limit. A hidden key is dropped from the recents, the Cmd+` cycle and the quick-tap target and records no visits (opening it or messaging it); filtering still finds it, and visiting it does not unhide it. Hidden keys are stored in `paseo-switcher:hidden`; the retired per-screen switches (`paseo-switcher:skipped-screens`) are merged into it once and deleted. Stored titles of hidden screens are kept so Settings can name them. The existing "hidden" tag still means hidden from Paseo's sidebar.
+Shift+Backspace hides the selected workspace or plugin screen (on a chat it does nothing); with a query, Backspace edits it. Each workspace and plugin-screen row and card has a 22px × button, shown on hover, labelled "Hide from switcher". The selection stays on its index (clamped) and the list refills up to the limit. A hidden key is dropped from the recents, the Cmd+` cycle and the quick-tap target and records no visits (opening it or messaging it); filtering still finds it, and visiting it does not unhide it. Hidden keys are stored in `paseo-switcher:hidden`; the retired per-screen switches (`paseo-switcher:skipped-screens`) are merged into it once and deleted. Stored titles of hidden screens are kept so Settings can name them. The existing "hidden" tag still means hidden from Paseo's sidebar.
+
+### Archiving
+
+Hold mode keeps Ctrl down throughout, so the keys depend on Shift alone. With an empty query, Backspace archives the selected row: a workspace through the workspace API of its own host, a chat through that chat's agent handle on its own host. Plugin-screen rows cannot be archived, so Backspace hides them as Shift+Backspace does. With a query, Backspace edits it and Ctrl or Alt+Backspace clears it.
+
+- **Arming.** A workspace always needs a second Backspace, because archiving a worktree workspace deletes its folder. A chat needs one only while it is running or needs input; idle, finished and failed chats go on the first press. The first press arms that one row: it takes a danger tint (`bad` at 14% under a 1px `bad` inset ring, over the selection tint) and the hint pill is replaced by "⌫ again to archive" in `bad` ink (touch: "Tap × again to archive"). Moving the selection, hovering another row, typing, any other key, or 4 seconds disarms it.
+- **Chat ×.** Each chat row has the same 22px hover × as workspaces, labelled "Archive chat", with the same arming rule.
+- **After.** The row leaves the list at once and the selection stays on its index, clamped. Archiving a workspace's last chat returns to the workspace list. The host's lists are then reloaded; a list that was already in flight cannot bring the row back.
+- **Failure.** The row comes back and the hint pill reads "Couldn't archive: <message>" (at most 80 characters) in `bad` ink for 3 seconds.
 
 ### Motion
 
