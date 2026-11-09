@@ -316,7 +316,7 @@ Svg ids are rewritten to a unique prefix per drawing, and local references follo
 
 ### Several hosts
 
-Paseo runs the plugin once per connected host. One switcher, made by the newest installation, handles the keys and lists the workspaces of every host the app can reach (each read through that host's own API and kept under its server ID), mixed by recency like any others. A row always shows its own host's data. When its host has not answered (offline, or still loading), it shows its sidebar label, else the name last seen when it was visited, never a bare "Workspace".
+Paseo runs the plugin once per connected host. One switcher, made by the newest installation, handles the keys and lists the workspaces of every host the app can reach (each read through that host's own API and kept under its server ID), mixed by recency like any others. A row always shows its own host's data. When its host has not answered (offline, or still loading), it shows its sidebar label, else the name last seen when it was visited, never a bare "Workspace". Each host's rows are drawn as soon as its list lands, so a slow host holds up no other, and a request that has not settled in 10 seconds is given up so the host is asked again on the next open.
 
 ### Sidebar display settings
 

@@ -199,6 +199,8 @@ const REFRESH_MS = 2000;
  */
 const QUIET_AFTER_SWITCH_MS = 2000;
 const WORKSPACES_STALE_MS = 5000;
+/** A host's list request that has not settled by then is given up, so the host can be asked again. */
+const LOAD_TIMEOUT_MS = 10_000;
 /** While the switcher is closed, the agent list is refreshed in idle time this often (5 s), so messages count. */
 const AGENTS_BACKGROUND_MS = 5000;
 const MAX_THUMBS = 12;
@@ -684,11 +686,10 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** Bumped when the background setting changes, so a load that started before it is discarded. */
   let generation = 0;
 
-  /** Reloads the workspaces of every known host whose list is older than `maxAge`; true when any landed. */
-  function loadWorkspaces(maxAge = 0): Promise<boolean> {
+  /** Reloads the workspaces of every known host whose list is older than `maxAge`, each on its own. */
+  function loadWorkspaces(maxAge = 0) {
     const now = Date.now();
-    const hosts = knownHosts().filter((host) => now - (hostData.get(host)?.workspacesAt ?? 0) > maxAge);
-    return Promise.all(hosts.map(loadHostWorkspaces)).then((done) => done.some(Boolean));
+    for (const host of knownHosts()) if (now - (hostData.get(host)?.workspacesAt ?? 0) > maxAge) void loadHostWorkspaces(host);
   }
 
   function loadHostWorkspaces(host: string): Promise<boolean> {
@@ -698,12 +699,14 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (!api) return Promise.resolve(false);
     const mine = generation;
     const wanted = includeBackground;
-    const promise: Promise<boolean> = listWithBackgroundFallback(wanted, (include) =>
-      api.workspaces.list({
-        page: { limit: 200 },
-        sort: [{ key: "activity_at", direction: "desc" }],
-        ...(include ? { filter: { includeBackground: true } } : {}),
-      }),
+    const promise: Promise<boolean> = withTimeout(
+      listWithBackgroundFallback(wanted, (include) =>
+        api.workspaces.list({
+          page: { limit: 200 },
+          sort: [{ key: "activity_at", direction: "desc" }],
+          ...(include ? { filter: { includeBackground: true } } : {}),
+        }),
+      ),
     )
       .then(({ value: result, includedBackground }) => {
         if (mine !== generation) return false;
@@ -739,6 +742,8 @@ function createSwitcher(installs: Installation[]): Switcher {
         data.workspaces = next;
         data.workspacesAt = Date.now();
         noteNames();
+        // Each host's rows show as soon as its list lands; a slow host holds up no other.
+        if (root) refreshCardsAndRender();
         return true;
       })
       .catch(() => {
@@ -760,10 +765,9 @@ function createSwitcher(installs: Installation[]): Switcher {
     writeJson(NAMES_KEY, knownNames);
   }
 
-  /** Reloads the agents of every known host whose list is older than `maxAge`. */
-  function loadAgents(maxAge = 0): Promise<boolean> {
-    const hosts = knownHosts().filter((host) => agentsStale(host, maxAge));
-    return Promise.all(hosts.map(loadHostAgents)).then((done) => done.some(Boolean));
+  /** Reloads the agents of every known host whose list is older than `maxAge`, each on its own. */
+  function loadAgents(maxAge = 0) {
+    for (const host of knownHosts()) if (agentsStale(host, maxAge)) void loadHostAgents(host);
   }
 
   function agentsStale(host: string, maxAge: number): boolean {
@@ -780,12 +784,14 @@ function createSwitcher(installs: Installation[]): Switcher {
     }
     const mine = generation;
     const wanted = includeBackground;
-    const promise: Promise<boolean> = listWithBackgroundFallback(wanted, (include) =>
-      api.agents.list({
-        page: { limit: 200 },
-        sort: [{ key: "updated_at", direction: "desc" }],
-        ...(include ? { filter: { includeBackground: true } } : {}),
-      }),
+    const promise: Promise<boolean> = withTimeout(
+      listWithBackgroundFallback(wanted, (include) =>
+        api.agents.list({
+          page: { limit: 200 },
+          sort: [{ key: "updated_at", direction: "desc" }],
+          ...(include ? { filter: { includeBackground: true } } : {}),
+        }),
+      ),
     )
       .then(({ value: result }) => {
         if (mine !== generation) return false;
@@ -1156,10 +1162,8 @@ function createSwitcher(installs: Installation[]): Switcher {
     hostNames = hostLabels();
     fillScreenIcons();
     render();
-    void loadAgents(WORKSPACES_STALE_MS);
-    void loadWorkspaces(WORKSPACES_STALE_MS).then((landed) => {
-      if (landed && root) refreshCardsAndRender();
-    });
+    loadAgents(WORKSPACES_STALE_MS);
+    loadWorkspaces(WORKSPACES_STALE_MS);
   }
 
   /** Rebuilds the open list after new data landed, keeping the selected card if it is still there. */
@@ -2077,12 +2081,12 @@ function createSwitcher(installs: Installation[]): Switcher {
     // A message sent from a screen that isn't a workspace page (a bot chat, say) is only seen
     // through the agent list, so keep it fresh while the switcher is closed.
     if (countMessages && !open && !doc.hidden && Date.now() >= quietUntil && knownHosts().some((h) => agentsStale(h, AGENTS_BACKGROUND_MS))) {
-      whenIdle(() => void loadAgents(AGENTS_BACKGROUND_MS));
+      whenIdle(() => loadAgents(AGENTS_BACKGROUND_MS));
     }
   }, REFRESH_MS);
   syncRoute();
-  void loadWorkspaces();
-  void loadAgents();
+  loadWorkspaces();
+  loadAgents();
 
   const api: Switcher = {
     open: () => begin("sticky", 1),
@@ -2186,6 +2190,15 @@ function createSwitcher(installs: Installation[]): Switcher {
   };
   g[ACTIVE_KEY] = api;
   return api;
+}
+
+/** Rejects when `promise` has not settled within LOAD_TIMEOUT_MS. */
+function withTimeout<T>(promise: Promise<T>, ms = LOAD_TIMEOUT_MS): Promise<T> {
+  let timer: any;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("timed out")), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
 /**

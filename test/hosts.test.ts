@@ -32,6 +32,10 @@ function element(): any {
     removeEventListener() {},
     querySelector: () => null,
     querySelectorAll: () => [],
+    cloneNode: () => element(),
+    get firstChild() {
+      return element();
+    },
   };
   return node;
 }
@@ -40,13 +44,19 @@ function element(): any {
 function fakePage(pathname: string, storage: Record<string, string> = {}) {
   const listeners = new Map<string, Set<unknown>>();
   const store = new Map(Object.entries(storage));
+  const created: any[] = [];
+  const make = () => {
+    const node = element();
+    created.push(node);
+    return node;
+  };
   const document = {
     ...element(),
     head: element(),
     body: element(),
     hidden: false,
-    createElement: () => element(),
-    createTextNode: () => element(),
+    createElement: make,
+    createTextNode: (text: string) => Object.assign(make(), { textContent: text }),
   };
   const window = {
     location: { pathname, search: "" },
@@ -77,23 +87,36 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
     observe() {}
     disconnect() {}
   };
-  return { keydown: () => listeners.get("keydown")?.size ?? 0, store };
+  return {
+    keydown: () => listeners.get("keydown")?.size ?? 0,
+    store,
+    /** Every text the switcher has drawn so far. */
+    texts: () => created.map((n) => n.textContent).filter((t): t is string => typeof t === "string"),
+  };
 }
 
 function cleanGlobals() {
   for (const key of ["document", "window", "MutationObserver", "__paseoSwitcher", "__paseoSwitcherInstalls", "__paseoSwitcherLists"]) delete g[key];
 }
 
-/** A host's API that lists the given workspaces and no agents, recording each call. */
-function fakeApi(host: string, ids: string[], calls: string[]): any {
+function listing(host: string, ids: string[]) {
+  return {
+    entries: ids.map((id) => ({ id, name: `${host} ${id}`, projectDisplayName: host, status: "done", activityAt: "2026-11-01T00:00:00Z" })),
+    pageInfo: { hasMore: false },
+  };
+}
+
+/**
+ * A host's API that lists the given workspaces and no agents, recording each call. With `gate`, each
+ * workspace list waits for that promise; a gate that never settles is a host that never answers.
+ */
+function fakeApi(host: string, ids: string[], calls: string[], gate?: () => Promise<unknown>): any {
   return {
     workspaces: {
       list: async () => {
         calls.push(`${host}:workspaces`);
-        return {
-          entries: ids.map((id) => ({ id, name: `${host} ${id}`, projectDisplayName: host, status: "done", activityAt: "2026-11-01T00:00:00Z" })),
-          pageInfo: { hasMore: false },
-        };
+        if (gate) await gate();
+        return listing(host, ids);
       },
     },
     agents: {
@@ -159,6 +182,67 @@ test("every saved host's workspaces are loaded through that host's own API", asy
     assert.ok(!calls.includes("own:workspaces"));
     switcher.dispose();
   } finally {
+    cleanGlobals();
+  }
+});
+
+const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("a host that answers is shown at once, even while another host has not answered", async () => {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
+  try {
+    const calls: string[] = [];
+    let answerA = () => {};
+    const gateA = new Promise<void>((resolve) => (answerA = resolve));
+    const apis: Record<string, any> = {
+      srv_a: fakeApi("srv_a", ["wks_a1"], calls, () => gateA),
+      srv_b: fakeApi("srv_b", ["wks_b1"], calls, () => new Promise(() => {})),
+    };
+    const switcher = installSwitcher(apis.srv_a, { getPaseoClient: (id: string) => apis[id] });
+    await tick();
+    switcher.open();
+    await tick(20);
+    assert.ok(!page.texts().includes("srv_a wks_a1"));
+    answerA();
+    await tick(20);
+    assert.ok(page.texts().includes("srv_a wks_a1"), "host A's workspace is drawn while host B is silent");
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a host whose request never settles is asked again after the load timeout", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  try {
+    const calls: string[] = [];
+    const apis: Record<string, any> = {
+      srv_a: fakeApi("srv_a", ["wks_a1"], calls),
+      srv_b: fakeApi("srv_b", ["wks_b1"], calls, () => new Promise(() => {})),
+    };
+    const switcher = installSwitcher(apis.srv_a, { getPaseoClient: (id: string) => apis[id] });
+    await flush();
+    const asked = () => calls.filter((c) => c === "srv_b:workspaces").length;
+    assert.equal(asked(), 1);
+    switcher.open();
+    t.mock.timers.tick(200);
+    await flush();
+    assert.equal(asked(), 1, "still waiting: not asked twice at once");
+    t.mock.timers.tick(10_000);
+    await flush();
+    switcher.open();
+    t.mock.timers.tick(200);
+    await flush();
+    assert.equal(asked(), 2, "asked again once the first request timed out");
+    switcher.dispose();
+  } finally {
+    t.mock.timers.reset();
     cleanGlobals();
   }
 });
