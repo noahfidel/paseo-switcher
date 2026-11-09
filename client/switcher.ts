@@ -24,8 +24,9 @@ import {
   safeImageUrl,
   sanitizeSvg,
   scopeSvgIds,
-  parseSkippedScreens,
-  setScreenSkipped,
+  migrateHidden,
+  clampIndex,
+  setHidden,
   trackScreenVisit,
   type PendingScreenVisit,
   pluginScreenKey,
@@ -112,7 +113,10 @@ const LAYOUT_KEY = "paseo-switcher:layout";
 const SHORTCUT_KEY = "paseo-switcher:shortcut";
 const SCREENS_KEY = "paseo-switcher:screens";
 const INCLUDE_SCREENS_KEY = "paseo-switcher:include-screens";
-const SKIPPED_SCREENS_KEY = "paseo-switcher:skipped-screens";
+/** Keys hidden from the switcher (workspaces and plugin screens). */
+const HIDDEN_KEY = "paseo-switcher:hidden";
+/** Retired per-screen switches; read once into the hidden list, then deleted. */
+const LEGACY_SKIPPED_SCREENS_KEY = "paseo-switcher:skipped-screens";
 const SCREEN_TITLE = '[data-testid="plugin-surface-title"]';
 const BACKGROUND_KEY = "paseo-switcher:include-background";
 /** Last focused agent tab per workspace key. */
@@ -179,8 +183,9 @@ export interface Switcher {
   getIncludeScreens(): boolean;
   setIncludeScreens(include: boolean): void;
   /** Every plugin screen recorded so far, with whether it is switched off. */
-  getScreens(): Array<{ key: string; title: string; pluginId: string; skipped: boolean }>;
-  setScreenSkipped(key: string, skip: boolean): void;
+  /** What is hidden from the switcher, named for Settings. */
+  getHidden(): Array<{ key: string; title: string; subtitle: string }>;
+  unhide(key: string): void;
   getCountMessages(): boolean;
   setCountMessages(count: boolean): void;
   /** Called after the shortcut changes, so labels that name it can follow. Returns an unsubscribe. */
@@ -203,8 +208,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     setIncludeBackground() {},
     getIncludeScreens: () => DEFAULT_INCLUDE_SCREENS,
     setIncludeScreens() {},
-    getScreens: () => [],
-    setScreenSkipped() {},
+    getHidden: () => [],
+    unhide() {},
     getCountMessages: () => DEFAULT_COUNT_MESSAGES,
     setCountMessages() {},
     onShortcutChange: () => () => {},
@@ -224,12 +229,20 @@ export function installSwitcher(paseo: Paseo): Switcher {
   let includeScreens = parseIncludeScreens(readJson(INCLUDE_SCREENS_KEY, DEFAULT_INCLUDE_SCREENS));
   /** Latest title and params of each visited plugin screen. */
   let screens: Screens = parseScreens(readJson(SCREENS_KEY, {}));
-  /** Screens switched off in settings: no visits recorded, hidden from the list. */
-  let skippedScreens: string[] = parseSkippedScreens(readJson(SKIPPED_SCREENS_KEY, []));
+  /** Hidden from the switcher: no visits recorded, never listed or cycled to. Filtering still finds them. */
+  let hiddenKeys: string[] = migrateHidden(readJson(HIDDEN_KEY, []), readJson(LEGACY_SKIPPED_SCREENS_KEY, []));
+  try {
+    if (win.localStorage?.getItem(LEGACY_SKIPPED_SCREENS_KEY) != null) {
+      writeJson(HIDDEN_KEY, hiddenKeys);
+      win.localStorage.removeItem(LEGACY_SKIPPED_SCREENS_KEY);
+    }
+  } catch {
+    // Storage can be unavailable; the migration runs again next time.
+  }
   /** The plugin screen on show and how long it has been open; it counts as a visit after SCREEN_DWELL_MS. */
   let pendingScreen: PendingScreenVisit | null = null;
   /** Visited keys (workspaces, and plugin screens when included), most recent first; derived from `visits`. */
-  let mru: string[] = visibleKeys(recentKeys(visits), includeScreens, skippedScreens);
+  let mru: string[] = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
   /** Count a message you sent in a workspace as a visit to it. */
   let countMessages = parseCountMessages(readJson(COUNT_MESSAGES_KEY, DEFAULT_COUNT_MESSAGES));
   let limit = clampLimit(readJson(LIMIT_KEY, DEFAULT_LIMIT));
@@ -326,9 +339,9 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function setVisits(next: Visits) {
     if (next === visits) return;
     visits = next;
-    mru = visibleKeys(recentKeys(visits), includeScreens, skippedScreens);
+    mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
     writeJson(VISITS_KEY, visits);
-    const kept = pruneScreens(screens, visits, skippedScreens);
+    const kept = pruneScreens(screens, visits, hiddenKeys);
     if (kept !== screens) {
       screens = kept;
       writeJson(SCREENS_KEY, screens);
@@ -360,24 +373,24 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function syncRoute() {
     const screen = currentScreen();
     const key = currentStopKey();
-    // A plugin screen counts as a visit only once it has stayed open a moment, and never while skipped.
-    const skipped = Boolean(screen && key && skippedScreens.includes(key));
+    // A plugin screen counts as a visit only once it has stayed open a moment, and never while hidden.
+    const skipped = Boolean(screen && key && hiddenKeys.includes(key));
     const tracked = trackScreenVisit(pendingScreen, screen && !skipped ? key : null, Date.now());
     pendingScreen = tracked.pending;
     if (tracked.record) setVisits(recordVisit(visits, tracked.record.key, tracked.record.at));
     if (!key || (key === lastKey && !screen)) return;
     if (key !== lastKey) {
       lastKey = key;
-      if (!screen) setVisits(recordVisit(visits, key, Date.now()));
+      if (!screen && !hiddenKeys.includes(key)) setVisits(recordVisit(visits, key, Date.now()));
     }
-    // Keep the title and params of a recorded screen current; a skipped one only while it is still listed.
+    // Keep the title and params of a recorded screen current; a hidden one only while it is still stored.
     if (screen && key && (pendingScreen?.recorded || (skipped && screens[key]))) noteScreen(key, screen);
     if (currentKey()) watchPane();
   }
 
   /** Folds the loaded agents' last messages into the visit times, when that setting is on. */
   function countMessageVisits() {
-    if (countMessages) setVisits(mergeMessageVisits(visits, serverId(), agents));
+    if (countMessages) setVisits(mergeMessageVisits(visits, serverId(), agents, hiddenKeys));
   }
 
   /** Remembers which agent tab is active in the current workspace. One query inside the pane. */
@@ -810,7 +823,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     mode = nextMode;
     open = true;
     query = "";
-    cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null);
+    cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null, hiddenKeys);
     index = direction === 1 ? initialIndex(cards, currentStopKey()) : wrap(-1, cards.length);
     clearTimeout(showTimer);
     // A quick tap flips to the previous workspace without drawing anything.
@@ -835,18 +848,30 @@ export function installSwitcher(paseo: Paseo): Switcher {
     refreshCards();
     const kept = cards.findIndex((c) => c.key === selected);
     // A list that was empty while loading starts like a fresh open: on the previous workspace.
-    index = kept >= 0 ? kept : before === 0 && !query ? initialIndex(cards, currentStopKey()) : Math.max(0, Math.min(index, cards.length - 1));
+    index = kept >= 0 ? kept : before === 0 && !query ? initialIndex(cards, currentStopKey()) : clampIndex(index, cards.length);
     render();
   }
 
   function refreshCards() {
     if (!query) {
-      cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null);
+      cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null, hiddenKeys);
       return;
     }
     const all = filterCards(query, mru, serverId(), workspaces, Infinity);
     matches = all.length;
     cards = all.slice(0, MAX_LIMIT);
+  }
+
+  /** Hides a workspace or plugin screen from the switcher; the selection stays on its index and the list refills. */
+  function hideKey(key: string) {
+    const next = setHidden(hiddenKeys, key, true);
+    if (next === hiddenKeys) return;
+    hiddenKeys = next;
+    writeJson(HIDDEN_KEY, hiddenKeys);
+    mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
+    // A hidden screen on show stops counting as a visit from here on.
+    pendingScreen = null;
+    if (root) refreshCardsAndRender();
   }
 
   /** Typing filters; it also turns a held switcher into one that waits for Enter or a click. */
@@ -1042,11 +1067,13 @@ export function installSwitcher(paseo: Paseo): Switcher {
     } else if (mode === "hold") {
       keys([SHORTCUTS[shortcut].modifierLabel], "release to switch");
       keys(["Shift", SHORTCUTS[shortcut].keyLabel], "back");
+      keys(["⌫"], "hide from switcher");
       keys(["Esc"], "cancel");
       bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
     } else {
       keys(["Enter"], "switch");
       keys(arrows, "move");
+      keys(["⌫"], "hide from switcher");
       keys(["Esc"], "close");
       bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
     }
@@ -1082,6 +1109,19 @@ export function installSwitcher(paseo: Paseo): Switcher {
       }
     });
     node.addEventListener("click", () => commit(i));
+    if (!hiddenKeys.includes(card.key)) {
+      const hide = el("button", "pws-hide") as any;
+      hide.setAttribute("type", "button");
+      hide.setAttribute("aria-label", "Hide from switcher");
+      hide.title = "Hide from switcher";
+      hide.appendChild(icon("x", "pws-icon"));
+      hide.addEventListener("click", (e: any) => {
+        e.stopPropagation();
+        hideKey(card.key);
+      });
+      hide.addEventListener("mousedown", (e: any) => e.stopPropagation());
+      node.appendChild(hide);
+    }
     return node;
   }
 
@@ -1368,6 +1408,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     } else if (key === "Enter") commit();
     else if (key === "ArrowRight" || key === "ArrowDown") move(1);
     else if (key === "ArrowLeft" || key === "ArrowUp") move(-1);
+    // With nothing typed, Backspace hides the selected row; with a filter it keeps editing it.
+    else if (key === "Backspace" && !query && cards[index]) hideKey(cards[index].key);
     else if (key === "Backspace") setQuery(e.ctrlKey || e.altKey ? "" : query.slice(0, -1));
     else if (key.length === 1 && (!e.metaKey || SHORTCUTS[shortcut].modifier === "Meta") && (query || key !== " ")) setQuery(query + key);
   }
@@ -1448,25 +1490,27 @@ export function installSwitcher(paseo: Paseo): Switcher {
       if (value === includeScreens) return;
       includeScreens = value;
       writeJson(INCLUDE_SCREENS_KEY, value);
-      mru = visibleKeys(recentKeys(visits), includeScreens, skippedScreens);
+      mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
       // Turning it on starts recording from the screen on show; turning it off keeps what was recorded.
       if (currentScreen()) {
         lastKey = null;
         syncRoute();
       }
     },
-    getScreens: () =>
-      Object.entries(screens).flatMap(([key, meta]) => {
-        const parts = parsePluginScreenKey(key);
-        return parts ? [{ key, title: meta.title, pluginId: parts.pluginId, skipped: skippedScreens.includes(key) }] : [];
+    getHidden: () =>
+      hiddenKeys.map((key) => {
+        const screen = parsePluginScreenKey(key);
+        if (screen) return { key, title: screens[key]?.title ?? screenTitle(null, screen.pluginId), subtitle: `Plugin · ${prettifyPluginId(screen.pluginId)}` };
+        const info = workspaces?.get(splitKey(key).workspaceId);
+        return { key, title: info?.name ?? "Workspace", subtitle: info?.project ?? "" };
       }),
-    setScreenSkipped(key, skip) {
-      const next = setScreenSkipped(skippedScreens, key, skip);
-      if (next === skippedScreens) return;
-      skippedScreens = next;
-      writeJson(SKIPPED_SCREENS_KEY, skippedScreens);
-      mru = visibleKeys(recentKeys(visits), includeScreens, skippedScreens);
-      // Switching a screen back on starts recording again, from the screen on show.
+    unhide(key) {
+      const next = setHidden(hiddenKeys, key, false);
+      if (next === hiddenKeys) return;
+      hiddenKeys = next;
+      writeJson(HIDDEN_KEY, hiddenKeys);
+      mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
+      // Visits start counting again from the screen on show.
       pendingScreen = null;
     },
     getCountMessages: () => countMessages,
@@ -1789,6 +1833,14 @@ const CSS = `
 .pws-fact { display: inline-flex; align-items: center; gap: 4px; }
 .pws-diff { gap: 5px; }
 .pws-icon { width: 13px; height: 13px; flex: 0 0 auto; }
+.pws-card { position: relative; }
+.pws-hide {
+  position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px;
+  display: none; align-items: center; justify-content: center; cursor: pointer; z-index: 1;
+  background: var(--pws-key); color: var(--pws-muted); box-shadow: inset 0 0 0 1px var(--pws-border);
+}
+.pws-card:hover .pws-hide { display: flex; }
+.pws-hide:hover { color: var(--pws-bad); }
 .pws-icon.pws-badge-icon { width: 14px; height: 14px; color: var(--pws-muted); }
 .pws-initial .pws-badge-icon { width: 20px; height: 20px; }
 .pws-avatar { width: 16px; height: 16px; flex: 0 0 auto; display: block; }

@@ -54,8 +54,10 @@ import {
   visibleKeys,
   DEFAULT_INCLUDE_SCREENS,
   parseIncludeScreens,
-  parseSkippedScreens,
-  setScreenSkipped,
+  parseHidden,
+  setHidden,
+  migrateHidden,
+  clampIndex,
   pruneScreens,
   trackScreenVisit,
   SCREEN_DWELL_MS,
@@ -702,27 +704,38 @@ test("the plugin screens setting defaults on and reads only booleans", () => {
   assert.equal(parseIncludeScreens(true), true);
 });
 
-test("the skipped screens list is read defensively and keeps only plugin screen keys once each", () => {
+test("the hidden list is read defensively and keeps workspace and plugin screen keys once each", () => {
   const k = pluginScreenKey(S, "paseo-bots", "bots");
-  assert.deepEqual(parseSkippedScreens(undefined), []);
-  assert.deepEqual(parseSkippedScreens("x"), []);
-  assert.deepEqual(parseSkippedScreens({ [k]: true }), []);
-  assert.deepEqual(parseSkippedScreens([k, k, `${S}:ws`, 3, null, "plugin-screen|bad"]), [k]);
+  assert.deepEqual(parseHidden(undefined), []);
+  assert.deepEqual(parseHidden("x"), []);
+  assert.deepEqual(parseHidden({ [k]: true }), []);
+  assert.deepEqual(parseHidden([k, k, `${S}:ws`, `${S}:ws`, 3, null, "plugin-screen|bad", "nocolon", `${S}:`]), [k, `${S}:ws`]);
 });
 
-test("setting a screen skipped adds it once, and unskipping removes it", () => {
-  const k = pluginScreenKey(S, "paseo-bots", "bots");
-  const on = setScreenSkipped([], k, true);
+test("hiding adds a key once, and unhiding removes it", () => {
+  const k = `${S}:a`;
+  const on = setHidden([], k, true);
   assert.deepEqual(on, [k]);
-  assert.equal(setScreenSkipped(on, k, true), on);
-  assert.deepEqual(setScreenSkipped(on, k, false), []);
+  assert.equal(setHidden(on, k, true), on);
+  assert.equal(setHidden([], k, false).length, 0);
+  assert.deepEqual(setHidden(on, k, false), []);
 });
 
-test("a skipped screen's old entries are hidden from the order, cards and the quick tap; other screens stay", () => {
+test("the old skipped-screens list is merged into the hidden list once", () => {
+  const bots = pluginScreenKey(S, "paseo-bots", "bots");
+  const board = pluginScreenKey(S, "flowly", "board");
+  assert.deepEqual(migrateHidden([`${S}:a`], [bots, board]), [`${S}:a`, bots, board]);
+  assert.deepEqual(migrateHidden([bots], [bots, `${S}:zz`, 5]), [bots]);
+  assert.deepEqual(migrateHidden(undefined, [bots]), [bots]);
+  assert.deepEqual(migrateHidden(undefined, undefined), []);
+});
+
+test("a hidden key is dropped from the order, cards and the quick tap, workspace or screen; the rest stay", () => {
   const bots = pluginScreenKey(S, "paseo-bots", "bots");
   const board = pluginScreenKey(S, "flowly", "board");
   const mru = [bots, `${S}:a`, board, `${S}:b`];
   assert.deepEqual(visibleKeys(mru, true, [bots]), [`${S}:a`, board, `${S}:b`]);
+  assert.deepEqual(visibleKeys(mru, true, [`${S}:a`]), [bots, board, `${S}:b`]);
   assert.deepEqual(visibleKeys(mru, true, []), mru);
   assert.deepEqual(visibleKeys(mru, false, [bots]), [`${S}:a`, `${S}:b`]);
   assert.equal(previousKey(visibleKeys(mru, true, [bots]), `${S}:a`), board);
@@ -731,14 +744,38 @@ test("a skipped screen's old entries are hidden from the order, cards and the qu
   assert.deepEqual(cards.map((c) => c.key), [`${S}:a`, board, `${S}:b`]);
 });
 
-test("a skipped screen keeps its title in the store even with no visits, so it stays in the settings list", () => {
+test("a hidden workspace is not used to fill the list up to the limit, and the list refills from the next ones", () => {
+  const ws = list(info("a", 30), info("b", 20), info("c", 10));
+  const hidden = [`${S}:a`];
+  assert.deepEqual(buildCards(visibleKeys([`${S}:b`], true, hidden), S, ws, 2, null, hidden).map((c) => c.key), [`${S}:b`, `${S}:c`]);
+  assert.deepEqual(buildCards([], S, ws, 5, null, hidden).map((c) => c.key), [`${S}:b`, `${S}:c`]);
+});
+
+test("filtering still finds a hidden workspace", () => {
+  const ws = list(info("a", 30), info("b", 20));
+  assert.deepEqual(filterCards("a", [`${S}:a`], S, ws, 9).map((c) => c.key), [`${S}:a`]);
+});
+
+test("messages to a hidden workspace do not count as visits", () => {
+  const agents = { serverId: S, list: [{ id: "x", workspaceId: "a", activityAt: 1, lastUserMessageAt: 500 }, { id: "y", workspaceId: "b", activityAt: 1, lastUserMessageAt: 600 }] };
+  const next = mergeMessageVisits({}, S, agents, [`${S}:a`]);
+  assert.deepEqual(Object.keys(next), [`${S}:b`]);
+});
+
+test("the selection stays on its index after a hide, clamped to the shorter list", () => {
+  assert.equal(clampIndex(2, 5), 2);
+  assert.equal(clampIndex(4, 4), 3);
+  assert.equal(clampIndex(0, 0), 0);
+  assert.equal(clampIndex(-1, 3), 0);
+});
+
+test("a hidden screen keeps its title in the store even with no visits, so Settings can name it", () => {
   const bots = pluginScreenKey(S, "paseo-bots", "bots");
   const board = pluginScreenKey(S, "flowly", "board");
   const screens = { [bots]: { title: "Bots", search: "" }, [board]: { title: "Board", search: "" } };
   const visits = { [`${S}:a`]: 1 };
   assert.deepEqual(Object.keys(pruneScreens(screens, visits, [bots])), [bots]);
   assert.deepEqual(Object.keys(pruneScreens(screens, visits)), []);
-  assert.equal(pruneScreens({ [bots]: screens[bots] }, visits, [bots]).hasOwnProperty(bots), true);
 });
 
 test("a screen left in under a second records no visit; one left after a second does, at the time it was opened", () => {

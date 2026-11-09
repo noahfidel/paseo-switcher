@@ -120,6 +120,8 @@ P10 and P11 read the `pws:snapshot`, `pws:serialize` (with its `pws:xml` and `pw
 | K3 | Other listeners see only those two combos as an unidentified key: Shift+Tab, Cmd+Ctrl+Tab and Ctrl+A are unchanged |
 | K4 | Disposing the plugin gives the keys back |
 
+**Hiding (manual, not in `npm run e2e`):** with the switcher open and nothing typed, Backspace hides the selected row (the selection stays on the same index and the list refills); with a filter typed it edits the filter. The × on a hovered row (list and thumbnails) does the same. A hidden item is not listed or cycled to and a quick tap skips it, but a filter finds it. Settings then shows **Hidden from switcher** with **Unhide**; it disappears when empty. With an old `paseo-switcher:skipped-screens` in storage, it is moved into `paseo-switcher:hidden` and removed.
+
 **Lifecycle (R, E):** after a plugin reload there is exactly one switcher, which still claims Ctrl+Tab (`--reload` only). The plugin raised no page errors.
 
 **Icons (manual, not in `npm run e2e`):** open a plugin screen that has a header icon, stay a second, then open the switcher in List layout: its row shows that icon, muted, and a screen with no icon keeps the puzzle. With paseo-bots installed, a workspace whose most recently active bot-labelled chat is with a bot shows the bot's avatar at 16px, also after navigating (which re-runs the plugin) and after editing the bot on the Bots screen while the switcher is open.

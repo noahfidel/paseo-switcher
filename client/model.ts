@@ -308,29 +308,51 @@ export function recordScreen(screens: Screens, key: string, meta: ScreenMeta): S
 }
 
 /**
- * Drops details of screens no longer in the visit history, except skipped ones (they stay so they can be
- * switched back on). Returns `screens` itself when none were dropped.
+ * Drops details of screens no longer in the visit history, except hidden ones (they stay so Settings can name
+ * them). Returns `screens` itself when none were dropped.
  */
-export function pruneScreens(screens: Screens, visits: Visits, skipped: readonly string[] = []): Screens {
-  const keep = (k: string) => Object.hasOwn(visits, k) || skipped.includes(k);
+export function pruneScreens(screens: Screens, visits: Visits, hidden: readonly string[] = []): Screens {
+  const keep = (k: string) => Object.hasOwn(visits, k) || hidden.includes(k);
   if (Object.keys(screens).every(keep)) return screens;
   const kept: Screens = {};
   for (const [k, v] of Object.entries(screens)) if (keep(k)) kept[k] = v;
   return kept;
 }
 
-/** Screens the user switched off (key = host + plugin + screen, params ignored). Absent from the list means included. */
-export function parseSkippedScreens(value: unknown): string[] {
+/** Whether a key is one the switcher can hide: a plugin screen key, or `serverId:workspaceId`. */
+function isHideableKey(key: unknown): key is string {
+  if (typeof key !== "string") return false;
+  if (isPluginScreenKey(key)) return parsePluginScreenKey(key) !== null;
+  const i = key.indexOf(":");
+  return i > 0 && i < key.length - 1;
+}
+
+/** Keys hidden from the switcher (workspaces and plugin screens), each once, in the order they were hidden. */
+export function parseHidden(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const keys: string[] = [];
-  for (const k of value) if (typeof k === "string" && parsePluginScreenKey(k) && !keys.includes(k)) keys.push(k);
+  for (const k of value) if (isHideableKey(k) && !keys.includes(k)) keys.push(k);
   return keys;
 }
 
-/** Returns `skipped` itself when nothing changes. */
-export function setScreenSkipped(skipped: readonly string[], key: string, skip: boolean): string[] {
-  if (skipped.includes(key) === skip) return skipped as string[];
-  return skip ? [...skipped, key] : skipped.filter((k) => k !== key);
+/** Returns `hidden` itself when nothing changes. */
+export function setHidden(hidden: readonly string[], key: string, hide: boolean): string[] {
+  if (hidden.includes(key) === hide) return hidden as string[];
+  return hide ? [...hidden, key] : hidden.filter((k) => k !== key);
+}
+
+/** The hidden list with the retired per-screen "skipped screens" list folded in (plugin screen keys only). */
+export function migrateHidden(stored: unknown, legacySkipped: unknown): string[] {
+  const keys = parseHidden(stored);
+  if (Array.isArray(legacySkipped)) {
+    for (const k of legacySkipped) if (typeof k === "string" && parsePluginScreenKey(k) && !keys.includes(k)) keys.push(k);
+  }
+  return keys;
+}
+
+/** Keeps a selection on the same index after the list changed length. */
+export function clampIndex(index: number, length: number): number {
+  return length <= 0 ? 0 : Math.max(0, Math.min(index, length - 1));
 }
 
 /** A plugin screen left sooner than this records no visit, so redirect screens never reach the recents. */
@@ -343,7 +365,7 @@ export interface PendingScreenVisit {
 }
 
 /**
- * Feed it the plugin screen key on show (null on any other page, or for a skipped screen) on every route check.
+ * Feed it the plugin screen key on show (null on any other page, or for a hidden screen) on every route check.
  * It reports the visit once the screen has stayed open for SCREEN_DWELL_MS, stamped with when it was opened.
  */
 export function trackScreenVisit(
@@ -369,10 +391,10 @@ function screenCard(key: string, meta: ScreenMeta | undefined): Card | null {
   };
 }
 
-/** The visit order to use: plugin screens only when they are included, minus any skipped screen. */
-export function visibleKeys(mru: readonly string[], includeScreens: boolean, skipped: readonly string[] = []): string[] {
-  if (!includeScreens) return mru.filter((key) => !isPluginScreenKey(key));
-  return skipped.length ? mru.filter((key) => !skipped.includes(key)) : [...mru];
+/** The visit order to use: plugin screens only when they are included, minus anything hidden from the switcher. */
+export function visibleKeys(mru: readonly string[], includeScreens: boolean, hidden: readonly string[] = []): string[] {
+  const shown = includeScreens ? mru : mru.filter((key) => !isPluginScreenKey(key));
+  return hidden.length ? shown.filter((key) => !hidden.includes(key)) : [...shown];
 }
 
 export const DEFAULT_INCLUDE_SCREENS = true;
@@ -456,6 +478,7 @@ export function mergeMessageVisits(
   visits: Visits,
   serverId: string | null,
   agents: { serverId: string | null; list: readonly AgentInfo[] } | null,
+  hidden: readonly string[] = [],
 ): Visits {
   if (!serverId || !agents || agents.serverId !== serverId) return visits;
   let next: Visits | null = null;
@@ -463,6 +486,7 @@ export function mergeMessageVisits(
     const at = agent.lastUserMessageAt;
     if (!agent.workspaceId || !at) continue;
     const key = workspaceKey(serverId, agent.workspaceId);
+    if (hidden.includes(key)) continue;
     const current = (next ?? visits)[key];
     if (current !== undefined && current >= at) continue;
     next ??= { ...visits };
@@ -488,6 +512,7 @@ export function buildCards(
   workspaces: ReadonlyMap<string, WorkspaceInfo> | null,
   limit: number,
   screens?: Screens | null,
+  hidden: readonly string[] = [],
 ): Card[] {
   const cards: Card[] = [];
   const seen = new Set<string>();
@@ -507,7 +532,7 @@ export function buildCards(
   }
   if (serverId && workspaces && cards.length < limit) {
     const rest = [...workspaces.values()]
-      .filter((w) => !seen.has(workspaceKey(serverId, w.id)))
+      .filter((w) => !seen.has(workspaceKey(serverId, w.id)) && !hidden.includes(workspaceKey(serverId, w.id)))
       .sort((a, b) => b.activityAt - a.activityAt);
     for (const info of rest) {
       if (cards.length >= limit) break;

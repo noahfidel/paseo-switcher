@@ -7,6 +7,7 @@ Arc-style workspace switching for the Paseo desktop app. Hold Cmd and tap ` (the
 - Arrow keys move, Enter switches, Esc cancels
 - Typing filters all workspaces and keeps the switcher open until Enter or a click; Esc clears the filter
 - Hovering a row selects it and clicking switches to it
+- Backspace with nothing typed, or the × on a hovered row, hides that workspace or plugin screen from the switcher (see below)
 
 The Command Center also has **Switch workspace (Cmd+`)**, which (its title shows the shortcut you chose) opens the same switcher and waits for Enter or a click. Use it in a browser tab, where the browser keeps Ctrl+Tab for itself, or in a phone browser, where a tap switches.
 
@@ -22,6 +23,8 @@ The Command Center also has **Switch workspace (Cmd+`)**, which (its title shows
 - **Count chats you message as visits**: on by default. A workspace you send a message to ranks as if you had just opened it, even when you messaged it from a screen outside it, such as a bot chat. Chats a paseo-bots routine or another bot starts do not count until you reply to them. Off, only opening a workspace counts. Hidden workspaces still appear only with **Include background workspaces** on.
 
 A workspace shows the avatar of the paseo-bots bot behind its most recently active chat that carries a bot label (bot workspaces hold only bot chats) in place of the branch or folder icon. Bot avatars appear when paseo-bots is installed and enabled; without it nothing changes.
+
+**Hidden from switcher.** Hiding a row (Backspace with nothing typed, or the × on hover) means it is no longer listed, never cycled to by the shortcut or the quick tap, and records no visits, including messages. Typing a filter still finds hidden workspaces, and visiting one does not unhide it. Settings shows a **Hidden from switcher** section, only while something is hidden, with an **Unhide** button for each. (This is separate from the "hidden" tag, which marks workspaces Paseo hides from its sidebar.)
 
 Switching to a workspace that has no sidebar row (a hidden one, or one in a collapsed project) reopens whichever is newer: the chat you last had open there, or the chat you last sent a message to (including one used from the Bots screen). If neither exists, it opens the most recently active chat that was not started by a routine, ask or PR review watcher. Workspaces in the sidebar open the way a sidebar click does.
 

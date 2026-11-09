@@ -1,7 +1,7 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { SettingsCard, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
+import { SettingsAction, SettingsCard, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { useState, type ComponentType } from "react";
-import { MAX_LIMIT, MIN_LIMIT, prettifyPluginId, SHORTCUTS, type Layout, type Shortcut } from "./model";
+import { MAX_LIMIT, MIN_LIMIT, SHORTCUTS, type Layout, type Shortcut } from "./model";
 import type { Switcher } from "./switcher";
 
 const OPTIONS = Array.from({ length: MAX_LIMIT - MIN_LIMIT + 1 }, (_, i) => {
@@ -27,9 +27,10 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
     const [shortcut, setShortcut] = useState<Shortcut>(switcher.getShortcut());
     const [includeBackground, setIncludeBackground] = useState(switcher.getIncludeBackground());
     const [includeScreens, setIncludeScreens] = useState(switcher.getIncludeScreens());
-    const [screens, setScreens] = useState(switcher.getScreens());
+    const [hidden, setHidden] = useState(switcher.getHidden());
     const [countMessages, setCountMessages] = useState(switcher.getCountMessages());
     return (
+      <>
       <SettingsSection title="Switcher">
         <SettingsCard>
           <SettingsSelect
@@ -73,28 +74,13 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
           />
           <SettingsSwitch
             label="Include plugin screens"
-            hint="Plugin screens you open (a board, Bots, Schedules) become stops in the list, ordered by when you last visited, and reopen with the same settings. They count toward the number shown. Off: none are listed or remembered. Screens left within a second are never recorded; switch off any you have visited below."
+            hint="Plugin screens you open (a board, Bots, Schedules) become stops in the list, ordered by when you last visited, and reopen with the same settings. They count toward the number shown. Off: none are listed or remembered. Screens left within a second are never recorded."
             value={includeScreens}
             onValueChange={(value) => {
               switcher.setIncludeScreens(value);
               setIncludeScreens(switcher.getIncludeScreens());
-              setScreens(switcher.getScreens());
             }}
           />
-          {includeScreens
-            ? screens.map((screen) => (
-                <SettingsSwitch
-                  key={screen.key}
-                  label={screen.title}
-                  hint={`Plugin · ${prettifyPluginId(screen.pluginId)}. Off: never listed or remembered, and its past entries disappear.`}
-                  value={!screen.skipped}
-                  onValueChange={(value) => {
-                    switcher.setScreenSkipped(screen.key, !value);
-                    setScreens(switcher.getScreens());
-                  }}
-                />
-              ))
-            : null}
           <SettingsSwitch
             label="Count chats you message as visits"
             hint="A workspace you send a message to ranks as if you had just opened it, even from a screen outside it (a bot chat, say). Off: only opening a workspace counts."
@@ -106,6 +92,25 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
           />
         </SettingsCard>
       </SettingsSection>
+        {hidden.length ? (
+          <SettingsSection title="Hidden from switcher">
+            <SettingsCard>
+              {hidden.map((item) => (
+                <SettingsAction
+                  key={item.key}
+                  label={item.title}
+                  hint={item.subtitle || undefined}
+                  actionLabel="Unhide"
+                  onPress={() => {
+                    switcher.unhide(item.key);
+                    setHidden(switcher.getHidden());
+                  }}
+                />
+              ))}
+            </SettingsCard>
+          </SettingsSection>
+        ) : null}
+      </>
     );
   };
 }

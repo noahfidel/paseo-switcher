@@ -315,8 +315,8 @@ It appears only once there is a query: a 48px `solid` bar with a bottom rule, a 
 
 A `solid` pill under the sheet that lists only the keys that work right now:
 
-- Holding: Ctrl "release to switch", Shift Tab "back", Esc "cancel", then muted "Type to filter".
-- Opened from the Command Center: Enter "switch", arrows "move", Esc "close", "Type to filter".
+- Holding: Ctrl "release to switch", Shift Tab "back", ⌫ "hide from switcher", Esc "cancel", then muted "Type to filter".
+- Opened from the Command Center: Enter "switch", arrows "move", ⌫ "hide from switcher", Esc "close", "Type to filter".
 - Filtering: Enter "switch", arrows "move", Esc "clear".
 - No match: Backspace "edit", Esc "clear".
 
@@ -331,7 +331,11 @@ Arrows are ↑↓ in the list and ←→ in the strip. Keycaps are 18px tall, at
 
 ### Settings
 
-The host's Settings section "Switcher" with one card holding two `SettingsSelect` rows: Layout (List / Thumbnails) and Workspaces shown, each with a one-sentence hint. No custom styling.
+The host's Settings section "Switcher" with one card holding two `SettingsSelect` rows: Layout (List / Thumbnails) and Workspaces shown, each with a one-sentence hint. No custom styling. A second section, "Hidden from switcher", appears only while something is hidden: one `SettingsAction` row per item (workspace name and project, or plugin screen title and "Plugin · name") with an "Unhide" button.
+
+### Hiding
+
+Backspace with an empty query hides the selected row; with a query it edits the query. Each row and card also has a 22px × button, shown on hover, labelled "Hide from switcher". The selection stays on its index (clamped) and the list refills up to the limit. A hidden key is dropped from the recents, the Cmd+` cycle and the quick-tap target and records no visits (opening it or messaging it); filtering still finds it, and visiting it does not unhide it. Hidden keys are stored in `paseo-switcher:hidden`; the retired per-screen switches (`paseo-switcher:skipped-screens`) are merged into it once and deleted. Stored titles of hidden screens are kept so Settings can name them. The existing "hidden" tag still means hidden from Paseo's sidebar.
 
 ### Motion
 
