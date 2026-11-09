@@ -923,6 +923,8 @@ export interface KeyState {
   armed: boolean;
   /** How long ago the armed row was armed, in ms (Infinity when none is). */
   armedForMs: number;
+  /** A ⌫ keyup has been seen since the row was armed: the arming press was let go before this one. */
+  released: boolean;
 }
 
 export type KeyAction =
@@ -972,13 +974,13 @@ export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; al
       if (s.drilled) {
         // A chat is archived, never hidden; one still working asks for a second press.
         if (mods.shiftKey) return { type: "none" };
-        if (!s.busy || s.armed) return s.armed && s.armedForMs < ARM_GUARD_MS ? { type: "ignore" } : { type: "archive" };
+        if (!s.busy || s.armed) return s.armed && (s.armedForMs < ARM_GUARD_MS || !s.released) ? { type: "ignore" } : { type: "archive" };
         return { type: "arm" };
       }
       // Plugin screens cannot be archived, so ⌫ hides them like ⇧⌫. A workspace always asks twice.
       if (mods.shiftKey || s.screen) return { type: "hide" };
       if (!s.armed) return { type: "arm" };
-      return s.armedForMs < ARM_GUARD_MS ? { type: "ignore" } : { type: "archive" };
+      return s.armedForMs < ARM_GUARD_MS || !s.released ? { type: "ignore" } : { type: "archive" };
   }
   if (key.length === 1 && (!mods.metaKey || s.metaTypes) && (s.query || key !== " ")) return { type: "type", text: key };
   return { type: "none" };

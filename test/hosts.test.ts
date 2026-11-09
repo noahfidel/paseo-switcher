@@ -437,6 +437,7 @@ test("⌫ archives the selected workspace through its own host's API, after a se
     await tick(10);
     assert.deepEqual(calls.filter((c) => c.includes("archive")), [], "the first ⌫ only arms");
     await tick(300);
+    page.release({ key: "Backspace" });
     page.press({ key: "Backspace", code: "Backspace", metaKey: true });
     await tick(20);
     assert.deepEqual(calls.filter((c) => c.includes("archive")), ["srv_b:archive:wks_b1"]);
@@ -565,6 +566,7 @@ test("a second ⌫ right after arming is ignored and keeps the row armed; after 
     await tick(20);
     assert.deepEqual(archived(), []);
     await tick(300);
+    page.release({ key: "Backspace" });
     page.press(BS);
     await tick(20);
     assert.deepEqual(archived(), ["srv_b:archive:wks_b1"]);
@@ -593,6 +595,7 @@ test("after archiving a workspace in hold mode, releasing the modifier opens not
   try {
     page.press(BS);
     await tick(300);
+    page.release({ key: "Backspace" });
     page.press(BS);
     await tick(20);
     assert.deepEqual(archived(), ["srv_b:archive:wks_b1"]);
@@ -630,6 +633,26 @@ test("after hiding a workspace in hold mode, releasing the modifier opens nothin
     page.release(RELEASE);
     await tick(30);
     assert.deepEqual(page.pushed, []);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("a second ⌫ with no ⌫ keyup since arming is ignored however much time passes, and the row stays armed", async () => {
+  const { page, archived, switcher } = await openWithChats([]);
+  try {
+    page.press(BS);
+    // No keyup, and no repeat flag: a remote desktop's synthetic repeat.
+    await tick(300);
+    page.press(BS);
+    page.press(BS);
+    await tick(20);
+    assert.deepEqual(archived(), []);
+    page.release({ key: "Backspace" });
+    page.press(BS);
+    await tick(20);
+    assert.deepEqual(archived(), ["srv_b:archive:wks_b1"]);
   } finally {
     switcher.dispose();
     cleanGlobals();

@@ -50,7 +50,7 @@ paseo plugin install paseo-switcher
 | ⇧⌫ | Hide the selected workspace or plugin screen from the switcher (the × on a hovered row does the same) |
 | Esc | Clear the filter, then cancel |
 
-With text typed, ⌫ erases it (Ctrl or Option+⌫ clears it all). Moving, typing, any other key, or four seconds cancels a marked row. Holding ⌫ never archives: only a fresh press does, and one within a quarter second of the first is ignored. After archiving or hiding, the switcher waits for Enter or a click instead of switching when you release Cmd. If Paseo cannot archive, the row stays and the hint says why. The × on a hovered chat archives it with the same rule.
+With text typed, ⌫ erases it (Ctrl or Option+⌫ clears it all). Moving, typing, any other key, or four seconds cancels a marked row. Holding ⌫ never archives: only a fresh press does, and a second one counts only after the first was let go and a quarter second has passed. After archiving or hiding, the switcher waits for Enter or a click instead of switching when you release Cmd. If Paseo cannot archive, the row stays and the hint says why. The × on a hovered chat archives it with the same rule.
 
 A workspace's chats are listed with the one you last had open there first, then by last change, with chats a routine or bot started after yours. Each shows its title and its status, in the words Paseo's sidebar uses. Only chats are listed: Paseo cannot open a terminal tab from a link. The chats come from the host's 200 most recently changed; when it has more, the header says "recent chats", as a workspace's oldest ones may be missing.
 

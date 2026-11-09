@@ -124,7 +124,7 @@ test("chatCountLabel says 'recent' when the host's agent list was cut off, since
 
 // ---- keys -----------------------------------------------------------------------------------------
 
-const base: KeyState = { layout: "list", drilled: false, query: "", canDrill: true, hasSelection: true, metaTypes: true, screen: false, busy: false, armed: false, armedForMs: Infinity };
+const base: KeyState = { layout: "list", drilled: false, query: "", canDrill: true, hasSelection: true, metaTypes: true, screen: false, busy: false, armed: false, armedForMs: Infinity, released: true };
 const press = (key: string, state: Partial<KeyState> = {}, mods: { ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; shiftKey?: boolean; repeat?: boolean } = {}) =>
   keyAction(key, { ...base, ...state }, { ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, repeat: false, ...mods });
 
@@ -264,6 +264,18 @@ test("a second ⌫ within 250 ms of arming is ignored, without disarming, and ar
   assert.deepEqual(press("Backspace", { armed: true, armedForMs: 250, drilled: true, busy: true }), { type: "archive" });
   // Hiding a screen is not archiving; the guard does not apply to it.
   assert.deepEqual(press("Backspace", { screen: true, armedForMs: 0 }), { type: "hide" });
+});
+
+test("the archiving ⌫ needs a ⌫ keyup since the arming one, whatever the timing or repeat flag", () => {
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 5000, released: false }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 5000, released: true }), { type: "archive" });
+  const chat = { drilled: true, busy: true, armed: true, armedForMs: 5000 };
+  assert.deepEqual(press("Backspace", { ...chat, released: false }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { ...chat, released: true }), { type: "archive" });
+  // Arming itself, hiding and an idle chat's first press need no earlier keyup.
+  assert.deepEqual(press("Backspace", { released: false }), { type: "arm" });
+  assert.deepEqual(press("Backspace", { drilled: true, released: false }), { type: "archive" });
+  assert.deepEqual(press("Backspace", { screen: true, released: false }), { type: "hide" });
 });
 
 test("printable keys type into the filter of the level on show", () => {

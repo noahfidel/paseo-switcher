@@ -495,6 +495,8 @@ function createSwitcher(installs: Installation[]): Switcher {
   let armed: string | null = null;
   let armTimer: any = null;
   let armedAt = 0;
+  /** A ⌫ keyup has come since the row was armed (set by a click, which has no keypress to release). */
+  let armedReleased = false;
   /** A short message in the hint line (a failed archive), until it times out. */
   let notice: string | null = null;
   let noticeTimer: any = null;
@@ -1321,6 +1323,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (key === armed) return;
     armed = key;
     armedAt = Date.now();
+    armedReleased = false;
     clearTimeout(armTimer);
     if (key) {
       armTimer = setTimeout(() => {
@@ -1421,7 +1424,12 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (!drill || !chat) return;
     drill.index = at;
     const rowKey = chatArmKey(chat.id);
-    if (chatArchiveNeedsConfirm(chat) && armed !== rowKey) return setArmed(rowKey);
+    if (chatArchiveNeedsConfirm(chat) && armed !== rowKey) {
+      setArmed(rowKey);
+      // Armed by a click: no ⌫ was pressed, so none needs releasing.
+      armedReleased = true;
+      return;
+    }
     setArmed(null);
     void archiveChat(chat);
   }
@@ -2278,6 +2286,7 @@ function createSwitcher(installs: Installation[]): Switcher {
         busy: Boolean(chat && chatArchiveNeedsConfirm(chat)),
         armed: armed !== null && armed === rowKey,
         armedForMs: armed !== null && armed === rowKey ? Date.now() - armedAt : Infinity,
+        released: armedReleased,
       },
       { ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, shiftKey: e.shiftKey, repeat: Boolean(e.repeat) },
     );
@@ -2312,6 +2321,8 @@ function createSwitcher(installs: Installation[]): Switcher {
   }
 
   function onKeyUp(e: any) {
+    // Held or repeated ⌫ may lack the repeat flag (remote desktops), so archiving needs a real release.
+    if (open && armed && keys.realKey(e) === "Backspace") armedReleased = true;
     if (open && mode === "hold" && isReleaseKey(shortcut, keys.realKey(e))) {
       stop(e);
       if (drill) commitChat(drill.index);
