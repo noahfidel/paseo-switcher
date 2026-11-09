@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BOT_LABEL, botIdForWorkspace, parseScreens, pluginScreenKey, recordScreen, safeImageUrl, sanitizeSvg, scopeSvgIds, type AgentInfo } from "../client/model.ts";
+import { MAX_AVATAR_BYTES, MAX_ICON_BYTES, BOT_LABEL, botIdForWorkspace, parseScreens, pluginScreenKey, recordScreen, safeImageUrl, sanitizeSvg, scopeSvgIds, type AgentInfo } from "../client/model.ts";
 
 /** The output without the root's fixed namespace and aria attributes, so patterns like "http" only match content. */
 const body = (svg: string) => svg.replace(/ xmlns="[^"]*"| aria-hidden="true"/g, "");
@@ -188,4 +189,39 @@ test("scopeSvgIds gives two draws of the same svg different ids", () => {
 test("scopeSvgIds leaves an svg without ids alone", () => {
   const plain = sanitizeSvg(LUCIDE)!;
   assert.equal(scopeSvgIds(plain, "pws1-"), plain);
+});
+
+// A real paseo-bots avatar (avatarSvg output, 11 037 bytes): about half of all generated avatars are over 8 KB.
+const AVATAR = readFileSync(new URL("./fixtures/avatar-large.svg", import.meta.url), "utf8");
+const count = (svg: string, re: RegExp) => svg.match(re)?.length ?? 0;
+
+test("the avatar fixture is over the icon limit and under the avatar limit", () => {
+  assert.ok(AVATAR.length > MAX_ICON_BYTES && AVATAR.length < MAX_AVATAR_BYTES);
+  assert.equal(MAX_ICON_BYTES, 8 * 1024);
+  assert.equal(MAX_AVATAR_BYTES, 32 * 1024);
+});
+
+test("a large bot avatar passes the avatar limit with its drawing intact, and is refused at the icon limit", () => {
+  assert.equal(sanitizeSvg(AVATAR), null);
+  const out = sanitizeSvg(AVATAR, MAX_AVATAR_BYTES);
+  assert.ok(out);
+  assert.equal(count(out, /<rect /g), count(AVATAR, /<rect /g));
+  assert.equal(count(out, /fill="#[0-9a-f]+"/gi), count(AVATAR, /fill="#[0-9a-f]+"/gi));
+  assert.match(out, /viewBox="0 0 30 30"/);
+  assert.match(out, /shape-rendering="crispEdges"/);
+  const clip = /<clipPath id="([\w-]+)"/.exec(AVATAR)![1];
+  assert.match(out, new RegExp(`<clipPath id="${clip}"`));
+  assert.match(out, new RegExp(`clip-path="url\\(#${clip}\\)"`));
+});
+
+test("a large bot avatar is unchanged by id scoping apart from its clip id", () => {
+  const out = sanitizeSvg(AVATAR, MAX_AVATAR_BYTES)!;
+  const clip = /<clipPath id="([\w-]+)"/.exec(out)![1];
+  const scoped = scopeSvgIds(out, "pws-s1-");
+  assert.equal(scoped.replaceAll(`pws-s1-${clip}`, clip), out);
+});
+
+test("a stored screen icon over the icon limit is dropped when read back", () => {
+  const parsed = parseScreens({ [KEY]: { title: "T", search: "", icon: AVATAR } });
+  assert.deepEqual(parsed[KEY], { title: "T", search: "" });
 });

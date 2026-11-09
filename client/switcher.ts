@@ -22,6 +22,7 @@ import {
   parsePluginScreenUrl,
   parseScreens,
   safeImageUrl,
+  MAX_AVATAR_BYTES,
   sanitizeSvg,
   scopeSvgIds,
   migrateHidden,
@@ -1241,8 +1242,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
 
   /** Draws svg markup that already went through sanitizeSvg (stored values are sanitized again on load). */
   let svgDraws = 0;
-  function drawSvg(markup: string, className: string, px?: number): Node | null {
-    const clean = sanitizeSvg(markup);
+  function drawSvg(markup: string, className: string, px?: number, limit?: number): Node | null {
+    const clean = sanitizeSvg(markup, limit);
     if (!clean) return null;
     const holder = doc.createElement("div");
     holder.innerHTML = scopeSvgIds(clean, `pws-s${++svgDraws}-`);
@@ -1274,7 +1275,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     }
     if (!found) return null;
     if (found.svg) {
-      const node = drawSvg(found.svg, "pws-avatar", px);
+      const node = drawSvg(found.svg, "pws-avatar", px, MAX_AVATAR_BYTES);
       if (node) return node;
     }
     const url = safeImageUrl(found.imageUrl);

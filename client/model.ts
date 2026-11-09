@@ -668,7 +668,9 @@ const SVG_ATTRS = new Map(
 const SVG_VALUE = /^[\w\s#.,()%+-]*$/;
 const SVG_TAG = /<(\/?)([A-Za-z][\w:-]*)((?:\s+[^\s=>/"']+(?:\s*=\s*(?:"[^"]*"|'[^']*'))?)*)\s*(\/?)>/y;
 const SVG_ATTR = /([^\s=>/"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/g;
+/** Size limit for a plugin screen's header icon, which is stored; paseo-bots avatars are far bigger (up to ~11 KB, pixel rects). */
 export const MAX_ICON_BYTES = 8 * 1024;
+export const MAX_AVATAR_BYTES = 32 * 1024;
 
 function safeSvgValue(name: string, value: string): boolean {
   if (!SVG_VALUE.test(value)) return false;
