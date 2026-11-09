@@ -10,6 +10,9 @@ import {
   recordScreen,
   sanitizeSvg,
   sidebarRowSelector,
+  pickRowIcon,
+  screenRowSelector,
+  screensWithoutIcon,
 } from "../client/model.ts";
 
 const KEY = pluginScreenKey("srv", "flowly", "board");
@@ -81,4 +84,33 @@ test("sidebarRowSelector matches the plugin's active header and footer rows, wit
     '[data-testid^="plugin-sidebar-flowly-"][aria-selected="true"], [data-testid^="plugin-sidebar-footer-flowly-"][aria-selected="true"]',
   );
   assert.match(sidebarRowSelector('a"b\\c'), /plugin-sidebar-a\\"b\\\\c-/);
+});
+
+// RN-web draws a tinted <Image> as an <img> plus a hidden svg holding only the tint filter.
+const TINT = '<svg style="position:absolute;height:0;visibility:hidden;width:0"><defs><filter id="tint-1"><feFlood flood-color="#888"/><feComposite in2="SourceAlpha" operator="atop"/></filter></defs></svg>';
+
+test("pickRowIcon prefers a raster img over an svg, and skips svgs that only hold defs or filters", () => {
+  assert.equal(pickRowIcon([{ kind: "svg", markup: TINT }, { kind: "img", src: PNG }]), PNG);
+  assert.equal(pickRowIcon([{ kind: "svg", markup: SVG }, { kind: "img", src: PNG }]), PNG, "the img wins even after a drawn svg");
+  assert.equal(pickRowIcon([{ kind: "svg", markup: TINT }, { kind: "svg", markup: SVG }]), CLEAN);
+  assert.equal(pickRowIcon([{ kind: "svg", markup: TINT }]), null);
+  assert.equal(pickRowIcon([{ kind: "svg", markup: '<svg viewBox="0 0 24 24"><filter id="f"><feFlood/></filter></svg>' }]), null);
+  assert.equal(pickRowIcon([{ kind: "img", src: "https://example.com/a.png" }, { kind: "svg", markup: SVG }]), CLEAN, "an unusable img falls through");
+  assert.equal(pickRowIcon([]), null);
+});
+
+test("screenRowSelector finds a screen's own sidebar row, selected or not, in the header or footer", () => {
+  assert.equal(
+    screenRowSelector("flowly", "board"),
+    '[data-testid="plugin-sidebar-flowly-board"], [data-testid="plugin-sidebar-footer-flowly-board"]',
+  );
+  assert.match(screenRowSelector('a"b', "c\\d"), /plugin-sidebar-a\\"b-c\\\\d"/);
+});
+
+test("screensWithoutIcon lists the stored screens that have no icon yet", () => {
+  const screens = parseScreens({
+    [KEY]: { title: "Board", search: "", icon: PNG, iconFrom: "row" },
+    [pluginScreenKey("srv", "a", "b")]: { title: "A", search: "" },
+  });
+  assert.deepEqual(screensWithoutIcon(screens), [pluginScreenKey("srv", "a", "b")]);
 });

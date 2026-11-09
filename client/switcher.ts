@@ -47,6 +47,9 @@ import {
   isImageIcon,
   nextScreenIcon,
   sidebarRowSelector,
+  screenRowSelector,
+  screensWithoutIcon,
+  pickRowIcon,
   DEFAULT_REPO_ICONS,
   parseRepoIcons,
   repoIconKey,
@@ -122,9 +125,13 @@ import {
  *          Screens registered with addScreen + a sidebar item get no header badge, so the icon of the plugin's
  *          highlighted sidebar row wins: `SidebarRow` renders a pressable with test ID
  *          `plugin-sidebar-<pluginId>-<itemId>[-<rowId>]` (footer: `plugin-sidebar-footer-…`) and
- *          `aria-selected="true"` while the plugin marks it active (see `sidebarRowSelector`). Its first <svg>
- *          (sanitized) or <img> with a raster data URL is the icon. Only a plugin's own rows know its current
- *          screen, so another plugin's row is never active then. Not public either: re-check on every upgrade.
+ *          `aria-selected="true"` while the plugin marks it active (see `sidebarRowSelector`). An <img> in it with a
+ *          raster data URL is the icon, else its first <svg> that draws something (sanitized); RN-web draws a
+ *          tinted image as an <img> beside a hidden svg that holds only the tint filter, which is skipped. Only a
+ *          plugin's own rows know its current screen, so another plugin's row is never active then. When the
+ *          switcher opens, a stored screen with no icon yet takes the icon of the row whose test ID is exactly
+ *          `plugin-sidebar-<pluginId>-<screenId>` (or the footer's), selected or not (see `screenRowSelector`);
+ *          with no such row it keeps its puzzle. Not public either: re-check on every upgrade.
  *          Paseo 0.15 re-runs the plugin after each such navigation, so a disposed switcher leaves its
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
  * - hosts: Paseo 0.15 evaluates the plugin's client once per connected host (`PluginRegistry.byHost`), each
@@ -594,12 +601,31 @@ function createSwitcher(installs: Installation[]): Switcher {
     return svg ? sanitizeSvg(svg.outerHTML) : null;
   }
 
-  /** The icon a sidebar row draws first: an svg (sanitized) or an img with a small raster data URL. */
+  /** A sidebar row's icon: an img with a small raster data URL, else its first svg that draws something (sanitized). */
   function sidebarRowIcon(row: Node): string | null {
-    const found = row.querySelector("svg, img");
-    if (!found) return null;
-    if (found.tagName.toLowerCase() === "img") return cleanScreenIcon(found.getAttribute("src"));
-    return sanitizeSvg(found.outerHTML);
+    const found: Node[] = Array.from(row.querySelectorAll("svg, img"));
+    return pickRowIcon(
+      found.map((n) => (n.tagName.toLowerCase() === "img" ? { kind: "img" as const, src: n.getAttribute("src") } : { kind: "svg" as const, markup: n.outerHTML })),
+    );
+  }
+
+  /** Stored screens with no icon take their own sidebar row's, selected or not. Quietly does nothing without one. */
+  function fillScreenIcons() {
+    let next = screens;
+    for (const key of screensWithoutIcon(screens)) {
+      const parts = parsePluginScreenKey(key);
+      if (!parts) continue;
+      try {
+        const row = doc.querySelector(screenRowSelector(parts.pluginId, parts.screenId));
+        const icon = row ? sidebarRowIcon(row) : null;
+        if (icon) next = recordScreen(next, key, { ...next[key], icon, iconFrom: "row" });
+      } catch {
+        // An odd ID or markup leaves the screen with its puzzle icon.
+      }
+    }
+    if (next === screens) return;
+    screens = next;
+    writeJson(SCREENS_KEY, screens);
   }
 
   function syncRoute() {
@@ -1128,6 +1154,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (!open) return;
     display = parseSidebarDisplay(readJson(APP_SETTINGS_KEY, null));
     hostNames = hostLabels();
+    fillScreenIcons();
     render();
     void loadAgents(WORKSPACES_STALE_MS);
     void loadWorkspaces(WORKSPACES_STALE_MS).then((landed) => {

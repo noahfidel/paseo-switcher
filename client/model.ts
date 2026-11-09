@@ -400,6 +400,50 @@ export function sidebarRowSelector(pluginId: string): string {
   return `[data-testid^="plugin-sidebar-${id}-"][aria-selected="true"], [data-testid^="plugin-sidebar-footer-${id}-"][aria-selected="true"]`;
 }
 
+/**
+ * A screen's own sidebar row, selected or not: `plugin-sidebar-<pluginId>-<screenId>` (or the footer's), for
+ * plugins whose sidebar item shares the screen's ID. Not a public API; re-check on every upgrade.
+ */
+export function screenRowSelector(pluginId: string, screenId: string): string {
+  const esc = (s: string) => s.replace(/["\\]/g, "\\$&");
+  const id = `${esc(pluginId)}-${esc(screenId)}`;
+  return `[data-testid="plugin-sidebar-${id}"], [data-testid="plugin-sidebar-footer-${id}"]`;
+}
+
+/** Stored screens that have no icon yet, to fill in from their sidebar rows. */
+export function screensWithoutIcon(screens: Screens): string[] {
+  return Object.keys(screens).filter((k) => !screens[k].icon);
+}
+
+/** What a sidebar row draws, in page order. */
+export type RowIconCandidate = { kind: "img"; src: string | null } | { kind: "svg"; markup: string };
+
+const SVG_HIDDEN_PARTS = /<(defs|filter|clipPath|mask|linearGradient|radialGradient|pattern|symbol|title|desc|metadata)\b[\s\S]*?<\/\1\s*>/gi;
+const SVG_DRAWING = /<(path|circle|rect|line|polyline|polygon|ellipse|text|use|image)\b/i;
+
+/** Whether svg markup draws anything outside its definitions (a tint filter alone draws nothing). */
+function svgDraws(markup: string): boolean {
+  return SVG_DRAWING.test(markup.replace(SVG_HIDDEN_PARTS, ""));
+}
+
+/**
+ * A sidebar row's icon: an img with a raster data URL wins (RN-web draws a tinted image as an img beside a
+ * hidden svg that holds only the tint filter), else the first svg that draws something, sanitized.
+ */
+export function pickRowIcon(candidates: readonly RowIconCandidate[]): string | null {
+  for (const c of candidates) {
+    if (c.kind !== "img") continue;
+    const icon = cleanScreenIcon(c.src);
+    if (icon && isImageIcon(icon)) return icon;
+  }
+  for (const c of candidates) {
+    if (c.kind !== "svg") continue;
+    const icon = sanitizeSvg(c.markup);
+    if (icon && svgDraws(icon)) return icon;
+  }
+  return null;
+}
+
 function screenMeta(title: string, search: string, icon: string | null | undefined, iconFrom: IconSource | undefined): ScreenMeta {
   if (!icon) return { title, search };
   return iconFrom ? { title, search, icon, iconFrom } : { title, search, icon };
