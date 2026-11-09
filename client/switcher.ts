@@ -4,6 +4,7 @@ import {
   agentStateBucket,
   agentToOpen,
   canDrillInto,
+  chatCountLabel,
   chatListState,
   chatFacts,
   chatTitle,
@@ -297,7 +298,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   /** The agent tab last focused in each workspace, so switching back reopens it. */
   let agentMemory = parseAgentMemory(readJson(AGENTS_KEY, {}));
   /** The host's agents, for the "most recently active" fallback; tagged with the host they came from. */
-  let agents: { serverId: string | null; list: AgentInfo[] } | null = carried?.agents ?? null;
+  let agents: { serverId: string | null; list: AgentInfo[]; capped?: boolean } | null = carried?.agents ?? null;
   let agentsAt = carried?.agentsAt ?? 0;
   /** Show each workspace's repo icon (asked of the daemon side lazily, per project root). */
   let repoIcons = parseRepoIcons(readJson(REPO_ICONS_KEY, DEFAULT_REPO_ICONS));
@@ -590,7 +591,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
             statusAt: (status === "running" ? latest(agent.activeTurn?.startedAt) : status === "done" ? 0 : latest(agent.attentionTimestamp)) || undefined,
           });
         }
-        agents = { serverId: serverId(), list };
+        // One page of the host's most recently changed agents; Paseo cannot list one workspace's.
+        agents = { serverId: serverId(), list, capped: Boolean(result.pageInfo?.hasMore) };
         agentsAt = Date.now();
         const before = visits;
         countMessageVisits();
@@ -1259,7 +1261,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     header.appendChild(el("kbd", "pws-kbd", "←"));
     header.appendChild(el("span", "pws-drill-name", drill?.name ?? ""));
     const total = drill?.total ?? 0;
-    header.appendChild(el("span", "pws-drill-count", drill?.loaded ? (total === 1 ? "1 chat" : `${total} chats`) : ""));
+    header.appendChild(el("span", "pws-drill-count", chatCountLabel(total, { loaded: Boolean(drill?.loaded), capped: Boolean(agents?.capped) })));
     return header;
   }
 

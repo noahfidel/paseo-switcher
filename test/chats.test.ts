@@ -4,6 +4,7 @@ import {
   UNTITLED_CHAT,
   agentStateBucket,
   canDrillInto,
+  chatCountLabel,
   chatFacts,
   chatListState,
   chatTitle,
@@ -107,6 +108,15 @@ test("chatListState: loading until the agents load or fail, then the list, empty
   // Chats from an earlier load still show after a failed refresh.
   assert.equal(s({ loaded: true, failed: true, shown: 2 }), "list");
   assert.equal(s({ loaded: true, failed: true }), "failed");
+});
+
+test("chatCountLabel says 'recent' when the host's agent list was cut off, since older chats may be missing", () => {
+  assert.equal(chatCountLabel(3, { loaded: false, capped: false }), "");
+  assert.equal(chatCountLabel(1, { loaded: true, capped: false }), "1 chat");
+  assert.equal(chatCountLabel(3, { loaded: true, capped: false }), "3 chats");
+  assert.equal(chatCountLabel(0, { loaded: true, capped: false }), "0 chats");
+  assert.equal(chatCountLabel(1, { loaded: true, capped: true }), "1 recent chat");
+  assert.equal(chatCountLabel(3, { loaded: true, capped: true }), "3 recent chats");
 });
 
 // ---- keys -----------------------------------------------------------------------------------------

@@ -763,6 +763,15 @@ export function chatListState(s: { loaded: boolean; failed: boolean; query: stri
   return s.loaded ? "empty" : "loading";
 }
 
+/**
+ * The chat list header's count. Paseo's agent list cannot be asked for one workspace, so the switcher
+ * reads the host's most recently changed chats; when that list was cut off, older chats may be missing.
+ */
+export function chatCountLabel(total: number, s: { loaded: boolean; capped: boolean }): string {
+  if (!s.loaded) return "";
+  return `${total} ${s.capped ? "recent " : ""}${total === 1 ? "chat" : "chats"}`;
+}
+
 /** Chats whose title contains every word of the query, in the order given. */
 export function filterChats(chats: readonly AgentInfo[], query: string): AgentInfo[] {
   const words = queryWords(query);
@@ -1161,7 +1170,8 @@ export interface CarriedLists {
   workspaces: ReadonlyMap<string, WorkspaceInfo> | null;
   workspacesAt: number;
   homeServer: string | null;
-  agents: { serverId: string | null; list: AgentInfo[] } | null;
+  /** `capped`: the host had more agents than one page, so a workspace's oldest chats may be missing. */
+  agents: { serverId: string | null; list: AgentInfo[]; capped?: boolean } | null;
   agentsAt: number;
 }
 
