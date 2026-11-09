@@ -494,6 +494,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** The row a first ⌫ armed for archiving (a workspace's key, or `chat:<id>`), until another key or a timeout. */
   let armed: string | null = null;
   let armTimer: any = null;
+  let armedAt = 0;
   /** A short message in the hint line (a failed archive), until it times out. */
   let notice: string | null = null;
   let noticeTimer: any = null;
@@ -1308,6 +1309,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   function setArmed(key: string | null) {
     if (key === armed) return;
     armed = key;
+    armedAt = Date.now();
     clearTimeout(armTimer);
     if (key) {
       armTimer = setTimeout(() => {
@@ -2262,13 +2264,15 @@ function createSwitcher(installs: Installation[]): Switcher {
         screen: Boolean(card?.screen),
         busy: Boolean(chat && chatArchiveNeedsConfirm(chat)),
         armed: armed !== null && armed === rowKey,
+        armedForMs: armed !== null && armed === rowKey ? Date.now() - armedAt : Infinity,
       },
-      { ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, shiftKey: e.shiftKey },
+      { ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, shiftKey: e.shiftKey, repeat: Boolean(e.repeat) },
     );
     // Any key but the arming one disarms, even one that does nothing.
     setArmed(nextArmed(armed, rowKey, action));
     switch (action.type) {
       case "arm":
+      case "ignore":
         return;
       case "archive":
         if (drill) return chat ? void archiveChat(chat) : undefined;

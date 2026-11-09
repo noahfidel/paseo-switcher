@@ -921,6 +921,8 @@ export interface KeyState {
   busy: boolean;
   /** The selected row was armed by a ⌫ press and has not been disarmed since. */
   armed: boolean;
+  /** How long ago the armed row was armed, in ms (Infinity when none is). */
+  armedForMs: number;
 }
 
 export type KeyAction =
@@ -931,6 +933,7 @@ export type KeyAction =
   | { type: "cancel" }
   | { type: "clear" }
   | { type: "hide" }
+  | { type: "ignore" }
   | { type: "arm" }
   | { type: "archive" }
   | { type: "erase"; all: boolean }
@@ -942,7 +945,7 @@ export type KeyAction =
  * The list drills in with →; the thumbnails strip keeps ← → for moving and drills in with ↓.
  * Inside a workspace's chats, ↑ ↓ move and ← goes back to the workspaces.
  */
-export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean }): KeyAction {
+export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean; repeat: boolean }): KeyAction {
   const move = (delta: 1 | -1): KeyAction => ({ type: "move", delta });
   const drill: KeyAction = s.canDrill ? { type: "drill" } : { type: "none" };
   switch (key) {
@@ -963,15 +966,19 @@ export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; al
       // Text in the filter is edited, whatever else is held. In hold mode Ctrl is down the whole time,
       // so only Shift changes what ⌫ does on a row.
       if (s.query) return { type: "erase", all: mods.ctrlKey || mods.altKey };
+      // A held ⌫ must never walk down the list archiving rows: only a fresh press acts on a row.
+      if (mods.repeat) return { type: "ignore" };
       if (!s.hasSelection) return s.drilled ? { type: "none" } : { type: "erase", all: mods.ctrlKey || mods.altKey };
       if (s.drilled) {
         // A chat is archived, never hidden; one still working asks for a second press.
         if (mods.shiftKey) return { type: "none" };
-        return s.busy && !s.armed ? { type: "arm" } : { type: "archive" };
+        if (!s.busy || s.armed) return s.armed && s.armedForMs < ARM_GUARD_MS ? { type: "ignore" } : { type: "archive" };
+        return { type: "arm" };
       }
       // Plugin screens cannot be archived, so ⌫ hides them like ⇧⌫. A workspace always asks twice.
       if (mods.shiftKey || s.screen) return { type: "hide" };
-      return s.armed ? { type: "archive" } : { type: "arm" };
+      if (!s.armed) return { type: "arm" };
+      return s.armedForMs < ARM_GUARD_MS ? { type: "ignore" } : { type: "archive" };
   }
   if (key.length === 1 && (!mods.metaKey || s.metaTypes) && (s.query || key !== " ")) return { type: "type", text: key };
   return { type: "none" };
@@ -987,11 +994,14 @@ export function chatArchiveNeedsConfirm(chat: AgentInfo): boolean {
  * one that does nothing, disarms. A timeout disarms too, in the switcher.
  */
 export function nextArmed(current: string | null, selected: string | null, action: KeyAction): string | null {
+  if (action.type === "ignore") return current;
   return action.type === "arm" ? selected : null;
 }
 
 /** How long an armed row waits for its second ⌫, and how long a failure shows in the hint line. */
 export const ARM_MS = 4000;
+/** A second ⌫ sooner than this after arming is ignored: it is a bounce or a repeat, not a decision. */
+export const ARM_GUARD_MS = 250;
 export const ARCHIVE_ERROR_MS = 3000;
 
 /** The hint-line text for a failed archive, kept short. */

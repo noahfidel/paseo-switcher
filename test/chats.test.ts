@@ -124,9 +124,9 @@ test("chatCountLabel says 'recent' when the host's agent list was cut off, since
 
 // ---- keys -----------------------------------------------------------------------------------------
 
-const base: KeyState = { layout: "list", drilled: false, query: "", canDrill: true, hasSelection: true, metaTypes: true, screen: false, busy: false, armed: false };
-const press = (key: string, state: Partial<KeyState> = {}, mods: { ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; shiftKey?: boolean } = {}) =>
-  keyAction(key, { ...base, ...state }, { ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });
+const base: KeyState = { layout: "list", drilled: false, query: "", canDrill: true, hasSelection: true, metaTypes: true, screen: false, busy: false, armed: false, armedForMs: Infinity };
+const press = (key: string, state: Partial<KeyState> = {}, mods: { ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; shiftKey?: boolean; repeat?: boolean } = {}) =>
+  keyAction(key, { ...base, ...state }, { ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, repeat: false, ...mods });
 
 test("list layout: → opens a workspace's chats; ↑ ↓ ← move; → on a plugin screen does nothing", () => {
   assert.deepEqual(press("ArrowRight"), { type: "drill" });
@@ -231,6 +231,39 @@ test("a failed archive says so briefly", () => {
   assert.equal(archiveError("plain"), "Couldn't archive: plain");
   assert.equal(archiveError(undefined), "Couldn't archive");
   assert.equal(archiveError(new Error("x".repeat(200))).length <= 80, true);
+});
+
+test("a held ⌫ (auto-repeat) with nothing typed does nothing: no arm, archive or hide, at either level", () => {
+  const held = { repeat: true };
+  assert.deepEqual(press("Backspace", {}, held), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 5000 }, held), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { screen: true }, held), { type: "ignore" });
+  assert.deepEqual(press("Backspace", {}, { ...held, shiftKey: true }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { drilled: true }, held), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { drilled: true, busy: true, armed: true, armedForMs: 5000 }, held), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { hasSelection: false }, held), { type: "ignore" });
+});
+
+test("a held ⌫ still erases while the filter has text, and stops doing anything once it is empty", () => {
+  for (const drilled of [false, true]) {
+    assert.deepEqual(press("Backspace", { query: "ab", drilled }, { repeat: true }), { type: "erase", all: false });
+    assert.deepEqual(press("Backspace", { query: "", drilled }, { repeat: true }), { type: "ignore" });
+  }
+});
+
+test("an ignored key neither arms nor disarms; every other key still disarms", () => {
+  assert.equal(nextArmed("k1", "k1", { type: "ignore" }), "k1");
+  assert.equal(nextArmed(null, "k1", { type: "ignore" }), null);
+});
+
+test("a second ⌫ within 250 ms of arming is ignored, without disarming, and archives after that", () => {
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 0 }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 249 }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 250 }), { type: "archive" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 249, drilled: true, busy: true }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 250, drilled: true, busy: true }), { type: "archive" });
+  // Hiding a screen is not archiving; the guard does not apply to it.
+  assert.deepEqual(press("Backspace", { screen: true, armedForMs: 0 }), { type: "hide" });
 });
 
 test("printable keys type into the filter of the level on show", () => {

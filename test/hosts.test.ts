@@ -116,7 +116,9 @@ function listing(host: string, ids: string[]) {
  * A host's API that lists the given workspaces and no agents, recording each call. With `gate`, each
  * workspace list waits for that promise; a gate that never settles is a host that never answers.
  */
-function fakeApi(host: string, ids: string[], calls: string[], gate?: () => Promise<unknown>): any {
+function fakeApi(host: string, ids: string[], calls: string[], gate?: () => Promise<unknown>, chats: Record<string, string[]> = {}): any {
+  // `chats` maps a workspace id to the idle chats it holds; archiving one removes it from the host's list.
+  const alive = new Set(Object.entries(chats).flatMap(([ws, list]) => list.map((id) => `${ws}/${id}`)));
   return {
     workspaces: {
       list: async () => {
@@ -132,11 +134,16 @@ function fakeApi(host: string, ids: string[], calls: string[], gate?: () => Prom
     agents: {
       list: async () => {
         calls.push(`${host}:agents`);
-        return { entries: [], pageInfo: { hasMore: false } };
+        const entries = [...alive].map((path, i) => {
+          const [workspaceId, id] = path.split("/");
+          return { agent: { id, workspaceId, title: `chat ${id}`, status: "idle", updatedAt: new Date(Date.UTC(2026, 10, 1, 0, 0, 100 - i)).toISOString(), labels: {} } };
+        });
+        return { entries, pageInfo: { hasMore: false } };
       },
       ref: (id: string) => ({
         archive: async () => {
           calls.push(`${host}:archive-chat:${id}`);
+          for (const path of [...alive]) if (path.endsWith(`/${id}`)) alive.delete(path);
           return { archivedAt: "2026-11-09T00:00:00Z" };
         },
       }),
@@ -420,6 +427,7 @@ test("⌫ archives the selected workspace through its own host's API, after a se
     page.press({ key: "Backspace", code: "Backspace", metaKey: true });
     await tick(10);
     assert.deepEqual(calls.filter((c) => c.includes("archive")), [], "the first ⌫ only arms");
+    await tick(300);
     page.press({ key: "Backspace", code: "Backspace", metaKey: true });
     await tick(20);
     assert.deepEqual(calls.filter((c) => c.includes("archive")), ["srv_b:archive:wks_b1"]);
@@ -466,6 +474,93 @@ test("⇧⌫ hides the selected workspace instead of archiving it", async () => 
     assert.deepEqual(JSON.parse(page.store.get("paseo-switcher:hidden") ?? "[]"), ["srv_b:wks_b1"]);
     switcher.dispose();
   } finally {
+    cleanGlobals();
+  }
+});
+
+const BS = { key: "Backspace", code: "Backspace", metaKey: true };
+
+/** Two hosts; srv_b's workspace holds the given idle chats. The switcher is open on srv_b's workspace. */
+async function openWithChats(chatIds: string[]) {
+  const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
+  const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
+  const calls: string[] = [];
+  const apis: Record<string, any> = {
+    srv_a: fakeApi("srv_a", ["wks_a0"], calls),
+    srv_b: fakeApi("srv_b", ["wks_b1"], calls, undefined, { wks_b1: chatIds }),
+  };
+  const switcher = installSwitcher(fakeApi("own", [], calls), { getPaseoClient: (serverId: string) => apis[serverId] });
+  await tick(20);
+  page.press({ key: "`", code: "Backquote", metaKey: true });
+  await tick(150);
+  const archived = () => calls.filter((c) => c.includes("archive"));
+  return { page, calls, archived, switcher };
+}
+
+test("a held ⌫ never archives rows: it clears the filter, stops at empty, and archives nothing", async () => {
+  const { page, archived, switcher } = await openWithChats([]);
+  try {
+    page.press({ key: "w", code: "KeyW", metaKey: true });
+    page.press(BS);
+    for (let i = 0; i < 8; i++) page.press({ ...BS, repeat: true });
+    await tick(300);
+    for (let i = 0; i < 8; i++) page.press({ ...BS, repeat: true });
+    await tick(20);
+    assert.deepEqual(archived(), []);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("a held ⌫ in the chat list archives only the first chat, and does not go on to the workspaces", async () => {
+  const { page, archived, switcher } = await openWithChats(["c1", "c2", "c3"]);
+  try {
+    page.press({ key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    await tick(30);
+    page.press(BS);
+    for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
+    await tick(300);
+    for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
+    await tick(20);
+    assert.equal(archived().length, 1, archived().join());
+    assert.ok(archived()[0].startsWith("srv_b:archive-chat:"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("emptying the chat list by ⌫ returns to the workspaces, and a held ⌫ then archives no workspace", async () => {
+  const { page, archived, switcher } = await openWithChats(["c1"]);
+  try {
+    page.press({ key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    await tick(30);
+    page.press(BS);
+    for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
+    await tick(300);
+    for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
+    await tick(20);
+    assert.deepEqual(archived(), ["srv_b:archive-chat:c1"]);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("a second ⌫ right after arming is ignored and keeps the row armed; after the guard it archives", async () => {
+  const { page, archived, switcher } = await openWithChats([]);
+  try {
+    page.press(BS);
+    page.press(BS);
+    await tick(20);
+    assert.deepEqual(archived(), []);
+    await tick(300);
+    page.press(BS);
+    await tick(20);
+    assert.deepEqual(archived(), ["srv_b:archive:wks_b1"]);
+  } finally {
+    switcher.dispose();
     cleanGlobals();
   }
 });
