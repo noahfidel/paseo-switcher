@@ -132,7 +132,7 @@ function fakeApi(
   gate?: () => Promise<unknown>,
   chats: Record<string, string[]> = {},
   terminals: Record<string, string[]> = {},
-  failKill = false,
+  opts: { failKill?: boolean; terminalError?: string; terminalGate?: () => Promise<unknown>; unowned?: string[] } = {},
 ): any {
   // `chats` maps a workspace id to the idle chats it holds; archiving one removes it from the host's list.
   const alive = new Set(Object.entries(chats).flatMap(([ws, list]) => list.map((id) => `${ws}/${id}`)));
@@ -142,6 +142,8 @@ function fakeApi(
     terminals: {
       list: async (options: { workspaceId?: string } = {}) => {
         calls.push(`${host}:terminals:${options.workspaceId ?? "*"}`);
+        if (opts.terminalGate) await opts.terminalGate();
+        if (opts.terminalError) throw new Error(opts.terminalError);
         const entries = [...shells]
           .map((path) => path.split("/"))
           .filter(([ws]) => !options.workspaceId || ws === options.workspaceId)
@@ -151,7 +153,7 @@ function fakeApi(
       ref: (id: string) => ({
         kill: async () => {
           calls.push(`${host}:kill-terminal:${id}`);
-          if (failKill) throw new Error("terminal is gone");
+          if (opts.failKill) throw new Error("terminal is gone");
           for (const path of [...shells]) if (path.endsWith(`/${id}`)) shells.delete(path);
         },
       }),
@@ -518,13 +520,13 @@ test("⇧⌫ hides the selected workspace instead of archiving it", async () => 
 const BS = { key: "Backspace", code: "Backspace", metaKey: true };
 
 /** Two hosts; srv_b's workspace holds the given idle chats and terminals. The switcher is open on srv_b's workspace. */
-async function openWithChats(chatIds: string[], terminalIds: string[] = [], options: { failKill?: boolean } = {}) {
+async function openWithChats(chatIds: string[], terminalIds: string[] = [], options: Parameters<typeof fakeApi>[6] = {}) {
   const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
   const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
   const calls: string[] = [];
   const apis: Record<string, any> = {
     srv_a: fakeApi("srv_a", ["wks_a0"], calls, undefined, {}, { wks_b1: ["wrong_host"] }),
-    srv_b: fakeApi("srv_b", ["wks_b1", "wks_b2"], calls, undefined, { wks_b1: chatIds }, { wks_b1: terminalIds, wks_b2: ["other_ws"] }, options.failKill),
+    srv_b: fakeApi("srv_b", ["wks_b1", "wks_b2"], calls, undefined, { wks_b1: chatIds }, { wks_b1: terminalIds, wks_b2: ["other_ws"] }, options),
   };
   const switcher = installSwitcher(fakeApi("own", [], calls), { getPaseoClient: (serverId: string) => apis[serverId] });
   await tick(20);
@@ -620,6 +622,51 @@ test("a terminal that fails to close comes back and the hint line says why", asy
     await tick(20);
     assert.deepEqual(archived(), ["srv_b:kill-terminal:t1"]);
     assert.ok(page.texts().includes("Couldn't close: terminal is gone"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+const GATE = "Update the host to use workspace terminals through the SDK.";
+
+test("a host whose SDK gates workspace terminals lists no terminals: an empty workspace says so, not that it failed", async () => {
+  const { page, switcher } = await openWithChats([], [], { terminalError: GATE });
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    const texts = page.texts();
+    assert.ok(texts.includes("No sessions in this workspace"), texts.slice(-12).join("|"));
+    assert.ok(!texts.includes("Couldn’t load this workspace’s sessions"));
+    assert.ok(!texts.includes("Terminals unavailable"));
+    assert.ok(texts.includes("0 sessions"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("when the terminal list fails otherwise, the chats show with a 'Terminals unavailable' note", async () => {
+  const { page, switcher } = await openWithChats(["c1"], [], { terminalError: "socket closed" });
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    const texts = page.texts();
+    assert.ok(texts.includes("chat c1"));
+    assert.ok(texts.includes("Terminals unavailable"));
+    assert.ok(!texts.includes("Couldn’t load this workspace’s sessions"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("when the terminal list fails otherwise and there are no chats, the list says it could not load", async () => {
+  const { page, switcher } = await openWithChats([], [], { terminalError: "socket closed" });
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    assert.ok(page.texts().includes("Couldn’t load this workspace’s sessions"));
   } finally {
     switcher.dispose();
     cleanGlobals();

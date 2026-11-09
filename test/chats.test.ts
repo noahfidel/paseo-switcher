@@ -12,6 +12,8 @@ import {
   chatsForWorkspace,
   filterChats,
   filterSessions,
+  isTerminalsUnsupported,
+  showTerminalsNote,
   providerLabel,
   sessionCountLabel,
   sessionKey,
@@ -136,6 +138,21 @@ test("filterSessions matches every word against chat titles and terminal names a
   assert.deepEqual(filterSessions(list, "build").map((s) => s.id), ["1", "t"]);
   assert.deepEqual(filterSessions(list, "WATCHER build").map((s) => s.id), ["t"]);
   assert.deepEqual(filterSessions(list, " ").map((s) => s.id), ["1", "t", "2"]);
+});
+
+test("a host without workspace terminals in the SDK is told apart from a failed terminal list", () => {
+  assert.equal(isTerminalsUnsupported(new Error("Update the host to use workspace terminals through the SDK.")), true);
+  assert.equal(isTerminalsUnsupported("update the host to use workspace terminals"), true);
+  assert.equal(isTerminalsUnsupported(new Error("timed out")), false);
+  assert.equal(isTerminalsUnsupported(undefined), false);
+});
+
+test("the 'Terminals unavailable' note shows only beside rows, once the chats loaded and the terminals failed", () => {
+  assert.equal(showTerminalsNote({ chatsLoaded: true, terminalsFailed: true, shown: 2 }), true);
+  assert.equal(showTerminalsNote({ chatsLoaded: true, terminalsFailed: false, shown: 2 }), false);
+  assert.equal(showTerminalsNote({ chatsLoaded: false, terminalsFailed: true, shown: 2 }), false);
+  // With no rows, the empty state speaks instead.
+  assert.equal(showTerminalsNote({ chatsLoaded: true, terminalsFailed: true, shown: 0 }), false);
 });
 
 test("providerLabel names the agent's provider the way Paseo does, and nothing when unknown", () => {

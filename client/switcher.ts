@@ -11,6 +11,8 @@ import {
   clickArchiveAction,
   chatFacts,
   filterSessions,
+  isTerminalsUnsupported,
+  showTerminalsNote,
   providerLabel,
   sessionCountLabel,
   sessionKey,
@@ -1062,7 +1064,12 @@ function createSwitcher(installs: Installation[]): Switcher {
         terminalLists.set(key, list);
         return settle(true);
       })
-      .catch(() => settle(false))
+      .catch((error) => {
+        // A host too old for workspace terminals has none to list.
+        if (!isTerminalsUnsupported(error)) return settle(false);
+        terminalLists.set(key, []);
+        return settle(true);
+      })
       .finally(() => {
         if (loadingTerminals.get(key) === promise) loadingTerminals.delete(key);
       });
@@ -1807,6 +1814,8 @@ function createSwitcher(installs: Installation[]): Switcher {
       panel.setAttribute("aria-label", `Sessions in ${drill.name}`);
       if (drill.sessions.length) drill.sessions.forEach((session, i) => panel.appendChild(renderSession(session, i, at)));
       else panel.appendChild(sessionEmptyState());
+      const chatsLoaded = Boolean(agentsOf(splitKey(drill.key).serverId)) && !drill.failed;
+      if (showTerminalsNote({ chatsLoaded, terminalsFailed: drill.terminalsFailed, shown: drill.sessions.length })) panel.appendChild(el("div", "pws-note", "Terminals unavailable"));
       const sheet = el("div", "pws-sheet");
       sheet.appendChild(drillHeader());
       const shown = drill.sessions.length;

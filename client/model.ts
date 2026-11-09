@@ -940,6 +940,20 @@ export function armedHint(armedKey: string, touch: boolean): string {
   return touch ? `Tap × again to ${verb}` : `again to ${verb}`;
 }
 
+/**
+ * The SDK refuses `terminals.list` on a host too old for workspace terminals, with a message that names
+ * them. That host has no terminals to list, which is not a failure.
+ */
+export function isTerminalsUnsupported(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /update the host to use workspace terminals/i.test(message);
+}
+
+/** A muted "Terminals unavailable" note under the rows: the chats loaded, but the terminal list failed. */
+export function showTerminalsNote(s: { chatsLoaded: boolean; terminalsFailed: boolean; shown: number }): boolean {
+  return s.chatsLoaded && s.terminalsFailed && s.shown > 0;
+}
+
 /** Sessions whose name contains every word of the query, in the order given. */
 export function filterSessions(sessions: readonly Session[], query: string): Session[] {
   const words = queryWords(query);
