@@ -13,6 +13,10 @@ import {
   keyAction,
   ago,
   rowFacts,
+  DEFAULT_SIDEBAR_DISPLAY,
+  parseSidebarDisplay,
+  workspaceTitle,
+  type SidebarDisplay,
   buildCards,
   carriedLists,
   loadedWorkspaces,
@@ -128,8 +132,15 @@ import {
  *          switcher, made by the newest, handles the keys. It reads every host's workspaces and agents through
  *          the SDK's `getPaseoClient(serverId)`, so nothing loaded from one host is read as another's. The hosts
  *          to ask are those in the app's saved host list (localStorage `@paseo:daemon-registry`, an array of
- *          `{ serverId, … }`), the one on show, and those of visited workspaces. That key is not public either:
- *          re-check it on every Paseo upgrade.
+ *          `{ serverId, label, … }`), the one on show, and those of visited workspaces. That key is not public
+ *          either: re-check it on every Paseo upgrade. A row names its host by that `label`.
+ * - display: rows follow the sidebar's Display settings, read (never written) from Paseo's app settings in
+ *          localStorage `@paseo:app-settings` each time the switcher opens: `workspaceTitleSource`
+ *          ("title" | "branch"), `sidebarRowItems` ({ branch, project, host, changeRequest, services, labels },
+ *          plus the older `checks` and `scripts` switches), `sidebarChecksDisplay` ("iconAndText" | "icon" | "none")
+ *          and `sidebarWorkspaceTrailing` ("diff" | "timestamp" | "none"). Unreadable values fall back to Paseo's
+ *          defaults (see `parseSidebarDisplay`). Not public either: re-check the key, names and values on every
+ *          Paseo upgrade.
  */
 const ROUTE = /^\/h\/([^/]+)\/workspace\/([^/?#]+)/;
 const ROW_PREFIX = "sidebar-workspace-row-";
@@ -160,6 +171,8 @@ const REPO_ICONS_KEY = "paseo-switcher:repo-icons";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
 const HOSTS_KEY = "@paseo:daemon-registry";
+/** Paseo's app settings, read for the sidebar's Display settings (see the adapter notes). */
+const APP_SETTINGS_KEY = "@paseo:app-settings";
 /** Last known name and project of each visited workspace, for rows whose host has not answered. */
 const NAMES_KEY = "paseo-switcher:names";
 /** Global slot where a disposed switcher leaves its loaded lists for the next install. */
@@ -367,6 +380,10 @@ function createSwitcher(installs: Installation[]): Switcher {
   g[CARRY_KEY] = undefined;
   /** Each host's workspaces and agents, by server ID. A host's lists are only ever read under that host. */
   const hostData = new Map<string, HostData>(carried?.hosts ?? []);
+  /** The sidebar's Display settings, re-read each time the switcher opens. */
+  let display: SidebarDisplay = DEFAULT_SIDEBAR_DISPLAY;
+  /** Host names for rows, set only when there is more than one host; re-read with `display`. */
+  let hostNames = new Map<string, string>();
   /** Names of visited workspaces, for rows whose host has not answered and that have no sidebar row. */
   let knownNames: KnownNames = parseKnownNames(readJson(NAMES_KEY, {}));
   /** The agent tab last focused in each workspace, so switching back reopens it. */
@@ -471,12 +488,25 @@ function createSwitcher(installs: Installation[]): Switcher {
     return saved.length === 1 ? saved[0] : null;
   }
 
-  /** The app's saved hosts, connected or not. */
-  function savedHosts(): string[] {
+  /** The app's saved hosts, connected or not, with their names. */
+  function savedHostEntries(): { serverId: string; label: string | null }[] {
     const saved = readJson(HOSTS_KEY, null);
     const list = Array.isArray(saved) ? saved : saved?.hosts;
     if (!Array.isArray(list)) return [];
-    return list.map((h: any) => h?.serverId).filter((id: unknown): id is string => typeof id === "string" && id !== "");
+    return list
+      .filter((h: any) => typeof h?.serverId === "string" && h.serverId !== "")
+      .map((h: any) => ({ serverId: h.serverId, label: typeof h.label === "string" && h.label.trim() ? h.label.trim() : null }));
+  }
+
+  function savedHosts(): string[] {
+    return savedHostEntries().map((h) => h.serverId);
+  }
+
+  /** The names of the saved hosts, but only when there is more than one, as the sidebar shows them. */
+  function hostLabels(): Map<string, string> {
+    const entries = savedHostEntries();
+    if (entries.length < 2) return new Map();
+    return new Map(entries.map((h) => [h.serverId, h.label ?? h.serverId]));
   }
 
   /** Hosts to load: the saved ones, the one on show, and those of visited workspaces. */
@@ -1096,6 +1126,8 @@ function createSwitcher(installs: Installation[]): Switcher {
 
   function show() {
     if (!open) return;
+    display = parseSidebarDisplay(readJson(APP_SETTINGS_KEY, null));
+    hostNames = hostLabels();
     render();
     void loadAgents(WORKSPACES_STALE_MS);
     void loadWorkspaces(WORKSPACES_STALE_MS).then((landed) => {
@@ -1671,8 +1703,9 @@ function createSwitcher(installs: Installation[]): Switcher {
     node.appendChild(title);
 
     const meta = el("div", "pws-meta");
-    meta.appendChild(el("span", "pws-where", card.screen ? `Plugin · ${prettifyPluginId(card.screen.pluginId)}` : [info?.project, info?.branch].filter(Boolean).join(" · ")));
-    if (info && (info.additions || info.deletions)) meta.appendChild(diffNode(info));
+    const facts = cardFacts(card, Date.now());
+    meta.appendChild(el("span", "pws-where", card.screen ? `Plugin · ${prettifyPluginId(card.screen.pluginId)}` : [facts.project, facts.branch, facts.host].filter(Boolean).join(" · ")));
+    if (info && facts.diff) meta.appendChild(diffNode(info));
     node.appendChild(meta);
     return node;
   }
@@ -1684,12 +1717,17 @@ function createSwitcher(installs: Installation[]): Switcher {
     return diff;
   }
 
+  /** What a row or card shows, by the sidebar's Display settings. */
+  function cardFacts(card: Card, at: number) {
+    return rowFacts(card.info, at, card.screen ? { screen: card.screen, visitedAt: visits[card.key] } : undefined, display, hostNames.get(card.serverId) ?? null);
+  }
+
   /** A list row: state dot, name and where it lives, what its agent is doing, and compact facts. */
   function renderRow(card: Card, i: number, at: number): Node {
     const info = card.info;
     const name = cardName(card);
     const node = option(card, i, "pws-card pws-row", name);
-    const facts = rowFacts(info, at, card.screen ? { screen: card.screen, visitedAt: visits[card.key] } : undefined);
+    const facts = cardFacts(card, at);
 
     // The lead says what the row is; the agent's state sits with its label on the right.
     const lead = el("div", "pws-lead");
@@ -1713,9 +1751,12 @@ function createSwitcher(installs: Installation[]): Switcher {
     }
 
     const where = el("div", "pws-where");
-    if (facts.project) where.appendChild(el("span", "", facts.project));
-    if (facts.project && facts.branch) where.appendChild(doc.createTextNode(" · "));
-    if (facts.branch) where.appendChild(el("span", "pws-branch", facts.branch));
+    const parts: [string, string | null][] = [["", facts.project], ["pws-branch", facts.branch], ["pws-hostname", facts.host]];
+    for (const [className, text] of parts) {
+      if (!text) continue;
+      if (where.children.length) where.appendChild(doc.createTextNode(" · "));
+      where.appendChild(el("span", className, text));
+    }
     node.appendChild(where);
 
     const bits = el("div", "pws-facts");
@@ -1727,7 +1768,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       bits.appendChild(span);
     };
     if (facts.pr) fact(`pws-pr pws-pr-${facts.pr.state}`, facts.pr.number ? `#${facts.pr.number}` : "PR", `Pull request (${facts.pr.state})`, PR_ICON[facts.pr.state]);
-    if (facts.checks) fact(`pws-checks-${facts.checks}`, "", `Checks ${CHECK_LABEL[facts.checks]}`, CHECK_ICON[facts.checks]);
+    if (facts.checks) fact(`pws-checks-${facts.checks}`, facts.checksText ? CHECK_LABEL[facts.checks] : "", `Checks ${CHECK_LABEL[facts.checks]}`, CHECK_ICON[facts.checks]);
     if (facts.diff) {
       const diff = el("span", "pws-fact pws-diff");
       diff.appendChild(el("span", "pws-add", `+${facts.diff.additions}`));
@@ -1906,7 +1947,7 @@ function createSwitcher(installs: Installation[]): Switcher {
 
   /** A row's name: its host's data, else its sidebar row, else the name last seen; "Workspace" only when none is known. */
   function cardName(card: Card): string {
-    return card.screen?.title ?? card.info?.name ?? rowLabel(card.key) ?? knownNames[card.key]?.name ?? "Workspace";
+    return card.screen?.title ?? (card.info ? workspaceTitle(card.info, display) : null) ?? rowLabel(card.key) ?? knownNames[card.key]?.name ?? "Workspace";
   }
 
   function isDark(surface: string): boolean {

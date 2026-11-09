@@ -8,6 +8,10 @@ import {
   type RememberedAgent,
   ago,
   rowFacts,
+  DEFAULT_SIDEBAR_DISPLAY,
+  parseSidebarDisplay,
+  workspaceTitle,
+  type SidebarDisplay,
   buildCards,
   parseAgentMemory,
   pickFocusedAgent,
@@ -845,6 +849,14 @@ function facts(over: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
   };
 }
 
+/** Every sidebar detail on, so the tests below see each fact. */
+const ALL: SidebarDisplay = {
+  titleSource: "title",
+  items: { branch: true, project: true, host: true, changeRequest: true, services: true, labels: true },
+  checks: "iconAndText",
+  trailing: "timestamp",
+};
+
 test("rowFacts: running shows the state and how long", () => {
   const f = rowFacts(facts({ status: "running", statusAt: FACTS_NOW - 4 * 60_000 }), FACTS_NOW);
   assert.equal(f.state, "running");
@@ -877,10 +889,10 @@ test("rowFacts: idle shows how long ago, falling back to activity time", () => {
 });
 
 test("rowFacts: the branch is left out when it matches the name", () => {
-  assert.equal(rowFacts(facts(), FACTS_NOW).branch, null);
-  assert.equal(rowFacts(facts({ branch: "other" }), FACTS_NOW).branch, "other");
-  assert.equal(rowFacts(facts({ branch: null }), FACTS_NOW).branch, null);
-  assert.equal(rowFacts(facts(), FACTS_NOW).project, "paseo");
+  assert.equal(rowFacts(facts(), FACTS_NOW, undefined, ALL).branch, null);
+  assert.equal(rowFacts(facts({ branch: "other" }), FACTS_NOW, undefined, ALL).branch, "other");
+  assert.equal(rowFacts(facts({ branch: null }), FACTS_NOW, undefined, ALL).branch, null);
+  assert.equal(rowFacts(facts(), FACTS_NOW, undefined, ALL).project, "paseo");
 });
 
 test("rowFacts: hidden workspaces are flagged", () => {
@@ -898,6 +910,8 @@ test("rowFacts: pull request, checks, diff and unpushed commits, only when they 
   const full = rowFacts(
     facts({ pr: { number: 9161, state: "open", checks: "pending", review: null }, additions: 214, deletions: 37, ahead: 2 }),
     FACTS_NOW,
+    undefined,
+    { ...ALL, trailing: "diff" },
   );
   assert.deepEqual(full.pr, { number: 9161, state: "open" });
   assert.equal(full.checks, "pending");
@@ -923,6 +937,103 @@ test("rowFacts: a plugin screen shows only its plugin name and when it was visit
   assert.equal(f.diff, null);
   assert.equal(f.ahead, 0);
   assert.equal(f.hidden, false);
+});
+
+// The rows follow the sidebar's Display settings (Paseo's app settings), read each time the switcher opens.
+test("sidebar display: Paseo's defaults when nothing or junk is saved", () => {
+  assert.deepEqual(DEFAULT_SIDEBAR_DISPLAY, {
+    titleSource: "title",
+    items: { branch: false, project: false, host: true, changeRequest: true, services: true, labels: true },
+    checks: "iconAndText",
+    trailing: "timestamp",
+  });
+  assert.deepEqual(parseSidebarDisplay(null), DEFAULT_SIDEBAR_DISPLAY);
+  assert.deepEqual(parseSidebarDisplay("nope"), DEFAULT_SIDEBAR_DISPLAY);
+  assert.deepEqual(
+    parseSidebarDisplay({ workspaceTitleSource: "x", sidebarChecksDisplay: 3, sidebarWorkspaceTrailing: "soon", sidebarRowItems: { branch: "yes", host: null } }),
+    DEFAULT_SIDEBAR_DISPLAY,
+  );
+});
+
+test("sidebar display: saved values are read, each field on its own", () => {
+  const d = parseSidebarDisplay({
+    workspaceTitleSource: "branch",
+    sidebarRowItems: { branch: true, project: true, host: false, changeRequest: false, services: false, labels: false },
+    sidebarChecksDisplay: "icon",
+    sidebarWorkspaceTrailing: "diff",
+  });
+  assert.deepEqual(d, {
+    titleSource: "branch",
+    items: { branch: true, project: true, host: false, changeRequest: false, services: false, labels: false },
+    checks: "icon",
+    trailing: "diff",
+  });
+  assert.equal(parseSidebarDisplay({ sidebarRowItems: { project: true } }).items.branch, false, "a missing item keeps its default");
+});
+
+test("sidebar display: Paseo's older checks and scripts switches still count", () => {
+  assert.equal(parseSidebarDisplay({ sidebarRowItems: { checks: false } }).checks, "none");
+  assert.equal(parseSidebarDisplay({ sidebarRowItems: { checks: false }, sidebarChecksDisplay: "icon" }).checks, "icon", "the newer setting wins");
+  assert.equal(parseSidebarDisplay({ sidebarRowItems: { scripts: false } }).items.services, false);
+  assert.equal(parseSidebarDisplay({ sidebarRowItems: { scripts: false, services: true } }).items.services, true);
+});
+
+test("sidebar display: the title is the workspace's title or its branch, like the sidebar", () => {
+  const branch = { ...DEFAULT_SIDEBAR_DISPLAY, titleSource: "branch" as const };
+  assert.equal(workspaceTitle(facts({ name: "Fix login", branch: "fix-login" }), DEFAULT_SIDEBAR_DISPLAY), "Fix login");
+  assert.equal(workspaceTitle(facts({ name: "Fix login", branch: "fix-login" }), branch), "fix-login");
+  assert.equal(workspaceTitle(facts({ name: "Fix login", branch: null }), branch), "Fix login", "no branch: the title");
+});
+
+test("sidebar display: only the enabled details show, and the host only when it is given", () => {
+  const ws = facts({ name: "Fix login", branch: "fix-login", pr: { number: 7, state: "open", checks: "success", review: null }, additions: 3, deletions: 1 });
+  const off = rowFacts(ws, FACTS_NOW, undefined, DEFAULT_SIDEBAR_DISPLAY);
+  assert.equal(off.project, null, "project is off by default");
+  assert.equal(off.branch, null, "branch is off by default");
+  assert.equal(off.host, null, "one host: no host label");
+  assert.deepEqual(off.pr, { number: 7, state: "open" });
+  assert.equal(rowFacts(ws, FACTS_NOW, undefined, DEFAULT_SIDEBAR_DISPLAY, "Laptop").host, "Laptop");
+  assert.equal(rowFacts(ws, FACTS_NOW, undefined, { ...ALL, items: { ...ALL.items, host: false } }, "Laptop").host, null);
+  const on = rowFacts(ws, FACTS_NOW, undefined, ALL);
+  assert.equal(on.project, "paseo");
+  assert.equal(on.branch, "fix-login");
+  const noPr = rowFacts(ws, FACTS_NOW, undefined, { ...ALL, items: { ...ALL.items, changeRequest: false } });
+  assert.equal(noPr.pr, null);
+  assert.equal(noPr.checks, "success", "checks have their own setting, as in the sidebar");
+});
+
+test("sidebar display: the branch is left out when it is already the title", () => {
+  const ws = facts({ name: "Fix login", branch: "fix-login" });
+  assert.equal(rowFacts(ws, FACTS_NOW, undefined, ALL).branch, "fix-login");
+  assert.equal(rowFacts(ws, FACTS_NOW, undefined, { ...ALL, titleSource: "branch" }).branch, null);
+});
+
+test("sidebar display: checks as icon and text, icon only, or not at all", () => {
+  const ws = facts({ pr: { number: 7, state: "open", checks: "failure", review: null } });
+  const both = rowFacts(ws, FACTS_NOW, undefined, ALL);
+  assert.equal(both.checks, "failure");
+  assert.equal(both.checksText, true);
+  const icon = rowFacts(ws, FACTS_NOW, undefined, { ...ALL, checks: "icon" });
+  assert.equal(icon.checks, "failure");
+  assert.equal(icon.checksText, false);
+  assert.equal(rowFacts(ws, FACTS_NOW, undefined, { ...ALL, checks: "none" }).checks, null);
+});
+
+test("sidebar display: the trailing item is the time, the diff, or neither; status marks stay", () => {
+  const ws = facts({ status: "running", statusAt: FACTS_NOW - 4 * 60_000, additions: 5, deletions: 2 });
+  const time = rowFacts(ws, FACTS_NOW, undefined, ALL);
+  assert.equal(time.label, "Running · 4m");
+  assert.equal(time.diff, null);
+  const diff = rowFacts(ws, FACTS_NOW, undefined, { ...ALL, trailing: "diff" });
+  assert.equal(diff.label, "Running", "the status word stays, without its time");
+  assert.equal(diff.state, "running");
+  assert.deepEqual(diff.diff, { additions: 5, deletions: 2 });
+  const none = rowFacts(ws, FACTS_NOW, undefined, { ...ALL, trailing: "none" });
+  assert.equal(none.label, "Running");
+  assert.equal(none.diff, null);
+  const idle = facts();
+  assert.equal(rowFacts(idle, FACTS_NOW, undefined, ALL).label, "1h ago");
+  assert.equal(rowFacts(idle, FACTS_NOW, undefined, { ...ALL, trailing: "diff" }).label, null, "idle with no time: no label");
 });
 
 // Paseo re-runs the plugin after the switcher navigates by route (plugin screens, hidden workspaces),

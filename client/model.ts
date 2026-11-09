@@ -96,6 +96,51 @@ export function ago(at: number | undefined, now: number): string | null {
 /** Paseo's own workspace status, one to one. */
 export type RowState = WorkspaceInfo["status"];
 
+/** The sidebar's Display settings, as Paseo's app settings store them. Rows follow them. */
+export interface SidebarDisplay {
+  titleSource: "title" | "branch";
+  items: { branch: boolean; project: boolean; host: boolean; changeRequest: boolean; services: boolean; labels: boolean };
+  checks: "iconAndText" | "icon" | "none";
+  trailing: "diff" | "timestamp" | "none";
+}
+
+/** Paseo's own defaults for those settings. */
+export const DEFAULT_SIDEBAR_DISPLAY: SidebarDisplay = {
+  titleSource: "title",
+  items: { branch: false, project: false, host: true, changeRequest: true, services: true, labels: true },
+  checks: "iconAndText",
+  trailing: "timestamp",
+};
+
+/** Reads Paseo's app settings the way Paseo does, including its older `checks` and `scripts` switches. */
+export function parseSidebarDisplay(value: unknown): SidebarDisplay {
+  const saved = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const rawItems = saved.sidebarRowItems && typeof saved.sidebarRowItems === "object" ? (saved.sidebarRowItems as Record<string, unknown>) : {};
+  const flag = (key: keyof SidebarDisplay["items"]) =>
+    typeof rawItems[key] === "boolean" ? (rawItems[key] as boolean) : DEFAULT_SIDEBAR_DISPLAY.items[key];
+  const items = {
+    branch: flag("branch"),
+    project: flag("project"),
+    host: flag("host"),
+    changeRequest: flag("changeRequest"),
+    services: typeof rawItems.services === "boolean" ? rawItems.services : rawItems.scripts === false ? false : DEFAULT_SIDEBAR_DISPLAY.items.services,
+    labels: flag("labels"),
+  };
+  const checks = saved.sidebarChecksDisplay;
+  const trailing = saved.sidebarWorkspaceTrailing;
+  return {
+    titleSource: saved.workspaceTitleSource === "branch" ? "branch" : "title",
+    items,
+    checks: checks === "iconAndText" || checks === "icon" || checks === "none" ? checks : rawItems.checks === false ? "none" : DEFAULT_SIDEBAR_DISPLAY.checks,
+    trailing: trailing === "diff" || trailing === "timestamp" || trailing === "none" ? trailing : DEFAULT_SIDEBAR_DISPLAY.trailing,
+  };
+}
+
+/** A workspace's title as the sidebar shows it: its title, or its branch when the sidebar is set to branches. */
+export function workspaceTitle(info: WorkspaceInfo, display: SidebarDisplay): string {
+  return display.titleSource === "branch" ? info.branch ?? info.name : info.name;
+}
+
 /** What a list row shows, picked from a workspace (or plugin screen) so the DOM adapter stays dumb. */
 export interface RowFacts {
   state: RowState;
@@ -103,12 +148,16 @@ export interface RowFacts {
   label: string | null;
   /** Project name, or the prettified plugin name for a screen. */
   project: string | null;
-  /** Null when absent or equal to the name. */
+  /** Null when absent, turned off in the sidebar's settings, or already the title. */
   branch: string | null;
+  /** The host's name, when the sidebar shows hosts and there is more than one. */
+  host: string | null;
   hidden: boolean;
   pr: { number: number | null; state: PullRequestInfo["state"] } | null;
   /** Only while the pull request is open or draft. */
   checks: "pending" | "success" | "failure" | null;
+  /** Whether the checks' word shows beside their icon. */
+  checksText: boolean;
   diff: { additions: number; deletions: number } | null;
   ahead: number;
 }
@@ -128,37 +177,49 @@ function stateLabel(state: RowState, statusAt: number | undefined, activityAt: n
   return since ? `${word} · ${since}` : word;
 }
 
+/**
+ * What a row shows, following the sidebar's Display settings. `host` is the host's name, given only
+ * when there is more than one host. Status marks and words show whatever the settings say.
+ */
 export function rowFacts(
   info: WorkspaceInfo | null,
   now: number,
   screen?: { screen: ScreenStop; visitedAt?: number },
+  display: SidebarDisplay = DEFAULT_SIDEBAR_DISPLAY,
+  host: string | null = null,
 ): RowFacts {
+  const timed = display.trailing === "timestamp";
   if (!info) {
     return {
       state: "done",
-      label: idleLabel(screen?.visitedAt, now),
+      label: timed ? idleLabel(screen?.visitedAt, now) : null,
       project: screen ? prettifyPluginId(screen.screen.pluginId) : null,
       branch: null,
+      host: screen ? null : display.items.host ? host : null,
       hidden: false,
       pr: null,
       checks: null,
+      checksText: false,
       diff: null,
       ahead: 0,
     };
   }
   const state = info.status;
-  const label = stateLabel(state, info.statusAt, info.activityAt, now);
+  const label = timed ? stateLabel(state, info.statusAt, info.activityAt, now) : state === "done" ? null : STATUS_WORD[state];
   const pr = info.pr ?? null;
   const live = pr && (pr.state === "open" || pr.state === "draft");
+  const title = workspaceTitle(info, display);
   return {
     state,
     label,
-    project: info.project || null,
-    branch: info.branch && info.branch !== info.name ? info.branch : null,
+    project: display.items.project ? info.project || null : null,
+    branch: display.items.branch && info.branch && info.branch !== title ? info.branch : null,
+    host: display.items.host ? host : null,
     hidden: Boolean(info.background),
-    pr: pr ? { number: pr.number, state: pr.state } : null,
-    checks: live && pr.checks !== "none" ? pr.checks : null,
-    diff: info.additions || info.deletions ? { additions: info.additions, deletions: info.deletions } : null,
+    pr: pr && display.items.changeRequest ? { number: pr.number, state: pr.state } : null,
+    checks: live && pr.checks !== "none" && display.checks !== "none" ? pr.checks : null,
+    checksText: display.checks === "iconAndText",
+    diff: display.trailing === "diff" && (info.additions || info.deletions) ? { additions: info.additions, deletions: info.deletions } : null,
     ahead: info.ahead ?? 0,
   };
 }

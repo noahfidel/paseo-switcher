@@ -9,7 +9,7 @@ Arc-style workspace switching for Paseo, on Cmd+` by default (Ctrl+Tab, Option+T
 
 ![Holding Ctrl+Tab to browse recent workspaces, releasing to switch, a quick tap back, then typing "search" to find a workspace](docs/media/switcher.gif)
 
-Each row shows the full workspace name, project, branch, pull request with its checks and review, diff stat, unpushed commits, and what the agent is doing and for how long:
+Each row shows the full workspace name, pull request with its checks, unpushed commits, and what the agent is doing and for how long. Rows follow the sidebar's Display settings: the title or branch as the name, project, branch and host when the sidebar shows them, checks as icon and text or icon only, and the time or the diff stat at the end:
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/media/switcher-list-light.png">
