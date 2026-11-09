@@ -9,7 +9,7 @@
 ## Code boundaries
 
 - `index.client.tsx` wires the settings screen and Command Center entries, and installs the switcher on web and desktop only.
-- `client/model.ts` is pure ordering logic with unit tests. `client/switcher.ts` is the DOM adapter: keyboard handling, the strip, and thumbnails. `client/settings.tsx` is the settings screen.
+- `client/model.ts` is pure ordering logic with unit tests. `client/switcher.ts` is the DOM adapter: keyboard handling, the strip, and thumbnails. `client/morph.ts` applies each redraw to the open switcher, keeping nodes that show the same thing; row listeners must look their row up by key, not capture its position. `client/settings.tsx` is the settings screen.
 - `index.server.ts` and `server/repo-icon.ts` are the daemon side: the `icons.project` RPC (contract in `shared/icons.ts`, Zod only) that finds a repo's icon or its GitHub owner's avatar. It is typechecked with Node types through `tsconfig.server.json`; client code never imports `server/`.
 - `client/switcher.ts` reads Paseo's page structure, which is not a public plugin API. Every selector and route it relies on is listed at the top of that file. The plugin is pinned to one Paseo minor version for that reason.
 - Nothing may run on a navigation path. Thumbnail work happens only in idle time, outside the quiet period after a switch. See the performance checks in `TESTING.md`.

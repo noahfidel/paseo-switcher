@@ -1,4 +1,5 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { morphChildren, standIn } from "./morph";
 import {
   agentIdFromTabTestId,
   agentStateBucket,
@@ -1821,8 +1822,6 @@ function createSwitcher(installs: Installation[]): Switcher {
       root.addEventListener("mousedown", (e: any) => {
         if (e.target === root) close();
       });
-    } else {
-      for (const canvas of thumbs.values()) canvas.remove();
     }
     const surface = surfaceOf(currentPane() ?? doc.body);
     dark = isDark(surface);
@@ -1856,7 +1855,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     const at = Date.now();
     if (drill) {
       panel.setAttribute("aria-label", `Sessions in ${drill.name}`);
-      if (drill.sessions.length) drill.sessions.forEach((session, i) => panel.appendChild(renderSession(session, i, at)));
+      if (drill.sessions.length) drill.sessions.forEach((session) => panel.appendChild(renderSession(session, at)));
       else panel.appendChild(sessionEmptyState());
       const chatsLoaded = Boolean(agentsOf(splitKey(drill.key).serverId)) && !drill.failed;
       if (showTerminalsNote({ chatsLoaded, terminalsFailed: drill.terminalsFailed, shown: drill.sessions.length })) panel.appendChild(el("div", "pws-note", "Terminals unavailable"));
@@ -1865,13 +1864,14 @@ function createSwitcher(installs: Installation[]): Switcher {
       const shown = drill.sessions.length;
       if (drill.query) sheet.appendChild(queryBar(drill.query, shown === 1 ? "1 match" : shown ? `${shown} matches` : ""));
       sheet.appendChild(panel);
-      root.replaceChildren(sheet, hintBar());
+      // An open switcher keeps every node that still shows the same thing, so a poll never flashes.
+      morphChildren(root, [sheet, hintBar()]);
       if (fresh) host.appendChild(root);
       select();
       return;
     }
     panel.setAttribute("aria-label", "Switch workspace");
-    if (cards.length) cards.forEach((card, i) => panel.appendChild(list ? renderRow(card, i, at) : renderCard(card, i)));
+    if (cards.length) cards.forEach((card) => panel.appendChild(list ? renderRow(card, at) : renderCard(card)));
     else panel.appendChild(emptyState());
     if (!query && cards.length === 1 && cards[0].key === currentStopKey()) {
       const note = touchScreen() ? "Open another workspace to switch between them here." : `Open another workspace, then ${SHORTCUTS[shortcut].label} flips between the two.`;
@@ -1886,7 +1886,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     sheet.appendChild(panel);
     const parts: Node[] = [sheet];
     if (cards.length || query) parts.push(hintBar());
-    root.replaceChildren(...parts);
+    morphChildren(root, parts);
     if (fresh) host.appendChild(root);
     select();
     requestRepoIcons();
@@ -2032,21 +2032,28 @@ function createSwitcher(installs: Installation[]): Switcher {
    * A session row: its kind's icon and name; a chat adds its provider and its status in the words a
    * workspace row uses. Terminals have no status the switcher can read.
    */
-  function renderSession(session: Session, i: number, at: number): Node {
+  function renderSession(session: Session, at: number): Node {
     const title = sessionTitle(session);
     const chat = session.kind === "chat";
     const node = el("div", `pws-card pws-row ${chat ? "pws-chat" : "pws-terminal"}${drill && armed === sessionKey(session, splitKey(drill.key).serverId) ? " pws-armed" : ""}`);
     node.setAttribute("role", "option");
     node.setAttribute("aria-label", title);
     node.setAttribute(chat ? "data-agent" : "data-terminal", session.id);
+    // A redraw may keep this node for a session that moved, so its position is looked up when it fires.
+    const own = drill ? sessionKey(session, splitKey(drill.key).serverId) : null;
+    const position = () => (drill ? drill.sessions.findIndex((s) => sessionKey(s, splitKey(drill!.key).serverId) === own) : -1);
     node.addEventListener("mousemove", () => {
-      if (drill && drill.index !== i) {
+      const i = position();
+      if (drill && i >= 0 && drill.index !== i) {
         setArmed(null);
         drill.index = i;
         select();
       }
     });
-    node.addEventListener("click", () => commitSession(i));
+    node.addEventListener("click", () => {
+      const i = position();
+      if (i >= 0) commitSession(i);
+    });
     const label = sessionVerb(session) === "close" ? "Close terminal" : "Archive chat";
     const archive = el("button", "pws-hide") as any;
     archive.setAttribute("type", "button");
@@ -2055,7 +2062,8 @@ function createSwitcher(installs: Installation[]): Switcher {
     archive.appendChild(icon("x", "pws-icon"));
     archive.addEventListener("click", (e: any) => {
       e.stopPropagation();
-      archiveSessionAt(i);
+      const i = position();
+      if (i >= 0) archiveSessionAt(i);
     });
     archive.addEventListener("mousedown", (e: any) => e.stopPropagation());
     node.appendChild(archive);
@@ -2204,19 +2212,25 @@ function createSwitcher(installs: Installation[]): Switcher {
     return node;
   }
 
-  function option(card: Card, i: number, className: string, name: string): Node {
+  function option(card: Card, className: string, name: string): Node {
     const node = el("div", armed === card.key ? `${className} pws-armed` : className);
     node.setAttribute("role", "option");
     node.setAttribute("data-key", card.key);
     node.setAttribute("aria-label", name);
+    // A redraw may keep this node for a card that moved, so its position is looked up when it fires.
+    const position = () => cards.findIndex((c) => c.key === card.key);
     node.addEventListener("mousemove", () => {
-      if (index !== i) {
+      const i = position();
+      if (i >= 0 && index !== i) {
         setArmed(null);
         index = i;
         select();
       }
     });
-    node.addEventListener("click", () => commit(i));
+    node.addEventListener("click", () => {
+      const i = position();
+      if (i >= 0) commit(i);
+    });
     if (!hiddenKeys.includes(card.key)) {
       const hide = el("button", "pws-hide") as any;
       hide.setAttribute("type", "button");
@@ -2238,15 +2252,16 @@ function createSwitcher(installs: Installation[]): Switcher {
     return el("span", status === "running" ? "pws-spin pws-running" : `pws-dot pws-${status}`);
   }
 
-  function renderCard(card: Card, i: number): Node {
+  function renderCard(card: Card): Node {
     const info = card.info;
     const name = cardName(card);
-    const node = option(card, i, "pws-card", name);
+    const node = option(card, "pws-card", name);
 
     const frame = el("div", "pws-thumb");
     const canvas = thumbs.get(card.key);
     // A thumbnail from the other theme would flash; the placeholder reads better until it refreshes.
-    if (canvas && canvas.dataset.dark === String(dark)) frame.appendChild(canvas);
+    // A canvas already on show is held in place by a stand-in, so a redraw never detaches it.
+    if (canvas && canvas.dataset.dark === String(dark)) frame.appendChild(onShow(canvas) ? standIn(doc, canvas) : canvas);
     else frame.appendChild(placeholder(card, info?.project ?? knownNames[card.key]?.project ?? null));
     node.appendChild(frame);
 
@@ -2263,6 +2278,10 @@ function createSwitcher(installs: Installation[]): Switcher {
     return node;
   }
 
+  function onShow(node: Node): boolean {
+    return Boolean(root && typeof root.contains === "function" && root.contains(node));
+  }
+
   function diffNode(info: WorkspaceInfo): Node {
     const diff = el("span", "pws-part pws-diff");
     diff.appendChild(el("span", "pws-add", `+${info.additions}`));
@@ -2276,10 +2295,10 @@ function createSwitcher(installs: Installation[]): Switcher {
   }
 
   /** A list row: state dot, name and where it lives, what its agent is doing, and compact facts. */
-  function renderRow(card: Card, i: number, at: number): Node {
+  function renderRow(card: Card, at: number): Node {
     const info = card.info;
     const name = cardName(card);
-    const node = option(card, i, "pws-card pws-row", name);
+    const node = option(card, "pws-card pws-row", name);
     const facts = cardFacts(card, at);
 
     // The lead says what the row is; the agent's state sits with its label on the right.
