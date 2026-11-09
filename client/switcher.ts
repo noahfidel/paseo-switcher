@@ -1257,6 +1257,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   function hideKey(key: string) {
     const next = setHidden(hiddenKeys, key, true);
     if (next === hiddenKeys) return;
+    holdEnds();
     hiddenKeys = next;
     writeJson(HIDDEN_KEY, hiddenKeys);
     mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
@@ -1291,6 +1292,16 @@ function createSwitcher(installs: Installation[]): Switcher {
   }
 
   // ---- archiving -----------------------------------------------------------------------------------
+
+  /**
+   * Archiving or hiding a row changes what the selection points at, so releasing the modifier must not
+   * open whatever row moved under it. Like typing, it turns a held switcher into one that waits for Enter or a click.
+   */
+  function holdEnds() {
+    mode = "sticky";
+    clearTimeout(showTimer);
+    if (!root) show();
+  }
 
   function chatArmKey(agentId: string): string {
     return `chat:${agentId}`;
@@ -1348,6 +1359,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     const { serverId, workspaceId } = splitKey(card.key);
     const api = apiFor(serverId);
     if (!api) return showNotice(archiveError("that host is not reachable"));
+    holdEnds();
     archiving.add(card.key);
     const data = dataOf(serverId);
     const info = data.workspaces?.get(workspaceId);
@@ -1383,6 +1395,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     const serverId = splitKey(drill.key).serverId;
     const api = apiFor(serverId);
     if (!api) return showNotice(archiveError("that host is not reachable"));
+    holdEnds();
     archiving.add(rowKey);
     const data = dataOf(serverId);
     if (data.agents) data.agents = { ...data.agents, list: data.agents.list.filter((a) => a.id !== chat.id) };

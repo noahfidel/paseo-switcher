@@ -366,6 +366,7 @@ Hold mode keeps Ctrl down throughout, so the keys depend on Shift alone. With an
 - **Arming.** A workspace always needs a second Backspace, because archiving a worktree workspace deletes its folder. A chat needs one only while it is running or needs input; idle, finished and failed chats go on the first press. The first press arms that one row: it takes a danger tint (`bad` at 14% under a 1px `bad` inset ring, over the selection tint) and the hint pill is replaced by "⌫ again to archive" in `bad` ink (touch: "Tap × again to archive"). Moving the selection, hovering another row, typing, any other key, or 4 seconds disarms it. Two guards keep a held key from archiving: a repeating (held) Backspace with an empty query does nothing at all (it still erases typed text), and a second Backspace within 250 ms of arming is ignored without disarming.
 - **Chat ×.** Each chat row has the same 22px hover × as workspaces, labelled "Archive chat", with the same arming rule.
 - **After.** The row leaves the list at once and the selection stays on its index, clamped. Archiving a workspace's last chat returns to the workspace list. The host's lists are then reloaded; a list that was already in flight cannot bring the row back.
+- **Hold mode.** Archiving or hiding a row, like typing, makes a held switcher wait for Enter or a click, so releasing the modifier does not open whichever row moved under the selection.
 - **Failure.** The row comes back and the hint pill reads "Couldn't archive: <message>" (at most 80 characters) in `bad` ink for 3 seconds.
 
 ### Motion

@@ -46,6 +46,7 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
   const listeners = new Map<string, Set<unknown>>();
   const store = new Map(Object.entries(storage));
   const created: any[] = [];
+  const pushed: string[] = [];
   const make = () => {
     const node = element();
     created.push(node);
@@ -67,7 +68,7 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
       removeItem: (k: string) => void store.delete(k),
     },
     matchMedia: () => ({ matches: false }),
-    history: { state: null, pushState() {} },
+    history: { state: null, pushState: (_state: unknown, _title: string, path: string) => void pushed.push(path) },
     innerWidth: 1200,
     innerHeight: 800,
     requestAnimationFrame: (f: () => void) => setTimeout(f, 0),
@@ -84,6 +85,7 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
   };
   g.document = document;
   g.window = window;
+  g.PopStateEvent = class {};
   g.MutationObserver = class {
     observe() {}
     disconnect() {}
@@ -95,6 +97,13 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
       const e = { preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {}, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...event };
       for (const fn of [...(listeners.get("keydown") ?? [])]) (fn as (e: unknown) => void)(e);
     },
+    /** Releases a key, as the browser would. */
+    release: (event: Record<string, unknown>) => {
+      const e = { preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {}, ...event };
+      for (const fn of [...(listeners.get("keyup") ?? [])]) (fn as (e: unknown) => void)(e);
+    },
+    /** Every route the switcher navigated to by driving the router. */
+    pushed,
     store,
     /** Every text the switcher has drawn so far. */
     texts: () => created.map((n) => n.textContent).filter((t): t is string => typeof t === "string"),
@@ -102,7 +111,7 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
 }
 
 function cleanGlobals() {
-  for (const key of ["document", "window", "MutationObserver", "__paseoSwitcher", "__paseoSwitcherInstalls", "__paseoSwitcherLists", "__paseoSwitcherBuild"]) delete g[key];
+  for (const key of ["document", "window", "MutationObserver", "PopStateEvent", "__paseoSwitcher", "__paseoSwitcherInstalls", "__paseoSwitcherLists", "__paseoSwitcherBuild"]) delete g[key];
 }
 
 function listing(host: string, ids: string[]) {
@@ -487,7 +496,7 @@ async function openWithChats(chatIds: string[]) {
   const calls: string[] = [];
   const apis: Record<string, any> = {
     srv_a: fakeApi("srv_a", ["wks_a0"], calls),
-    srv_b: fakeApi("srv_b", ["wks_b1"], calls, undefined, { wks_b1: chatIds }),
+    srv_b: fakeApi("srv_b", ["wks_b1", "wks_b2"], calls, undefined, { wks_b1: chatIds }),
   };
   const switcher = installSwitcher(fakeApi("own", [], calls), { getPaseoClient: (serverId: string) => apis[serverId] });
   await tick(20);
@@ -559,6 +568,68 @@ test("a second ⌫ right after arming is ignored and keeps the row armed; after 
     page.press(BS);
     await tick(20);
     assert.deepEqual(archived(), ["srv_b:archive:wks_b1"]);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+const RELEASE = { key: "Meta" };
+
+test("releasing the modifier still switches when nothing was archived or hidden", async () => {
+  const { page, switcher } = await openWithChats([]);
+  try {
+    page.release(RELEASE);
+    await tick(30);
+    assert.deepEqual(page.pushed.map((p) => p.includes("wks_b1")), [true]);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("after archiving a workspace in hold mode, releasing the modifier opens nothing", async () => {
+  const { page, archived, switcher } = await openWithChats([]);
+  try {
+    page.press(BS);
+    await tick(300);
+    page.press(BS);
+    await tick(20);
+    assert.deepEqual(archived(), ["srv_b:archive:wks_b1"]);
+    page.release(RELEASE);
+    await tick(30);
+    assert.deepEqual(page.pushed, []);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("after archiving a chat in hold mode, releasing the modifier opens nothing", async () => {
+  const { page, archived, switcher } = await openWithChats(["c1", "c2"]);
+  try {
+    page.press({ key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    await tick(30);
+    page.press(BS);
+    await tick(20);
+    assert.equal(archived().length, 1);
+    page.release(RELEASE);
+    await tick(30);
+    assert.deepEqual(page.pushed, []);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("after hiding a workspace in hold mode, releasing the modifier opens nothing", async () => {
+  const { page, switcher } = await openWithChats([]);
+  try {
+    page.press({ ...BS, shiftKey: true });
+    await tick(20);
+    page.release(RELEASE);
+    await tick(30);
+    assert.deepEqual(page.pushed, []);
   } finally {
     switcher.dispose();
     cleanGlobals();
