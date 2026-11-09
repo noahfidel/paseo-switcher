@@ -15,6 +15,11 @@ import {
   rowFacts,
   buildCards,
   carriedLists,
+  loadedWorkspaces,
+  parseKnownNames,
+  rememberNames,
+  type HostData,
+  type KnownNames,
   parseAgentMemory,
   pickFocusedAgent,
   rememberAgent,
@@ -43,6 +48,7 @@ import {
   repoIconKey,
   repoIconRoots,
   repoIconTtl,
+  REPO_ICON_RETRY_MS,
   repoIconUrl,
   type ProjectIconAnswer,
   migrateHidden,
@@ -117,9 +123,13 @@ import {
  *          screen, so another plugin's row is never active then. Not public either: re-check on every upgrade.
  *          Paseo 0.15 re-runs the plugin after each such navigation, so a disposed switcher leaves its
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
- * Outside a workspace (the home screen) with no history yet, the host is found by matching a loaded
- * workspace to its sidebar row, or, with the sidebar hidden, from the app's saved host list when it
- * has a single host (localStorage `@paseo:daemon-registry`).
+ * - hosts: Paseo 0.15 evaluates the plugin's client once per connected host (`PluginRegistry.byHost`), each
+ *          with a `paseo` API bound to that host. All of them share `globalThis.__paseoSwitcherInstalls`, and one
+ *          switcher, made by the newest, handles the keys. It reads every host's workspaces and agents through
+ *          the SDK's `getPaseoClient(serverId)`, so nothing loaded from one host is read as another's. The hosts
+ *          to ask are those in the app's saved host list (localStorage `@paseo:daemon-registry`, an array of
+ *          `{ serverId, … }`), the one on show, and those of visited workspaces. That key is not public either:
+ *          re-check it on every Paseo upgrade.
  */
 const ROUTE = /^\/h\/([^/]+)\/workspace\/([^/?#]+)/;
 const ROW_PREFIX = "sidebar-workspace-row-";
@@ -150,8 +160,14 @@ const REPO_ICONS_KEY = "paseo-switcher:repo-icons";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
 const HOSTS_KEY = "@paseo:daemon-registry";
+/** Last known name and project of each visited workspace, for rows whose host has not answered. */
+const NAMES_KEY = "paseo-switcher:names";
 /** Global slot where a disposed switcher leaves its loaded lists for the next install. */
 const CARRY_KEY = "__paseoSwitcherLists";
+/** Global list of the plugin's live installations, one per host that runs it. */
+const INSTALLS_KEY = "__paseoSwitcherInstalls";
+/** Global slot of the one switcher that handles the keys. */
+const ACTIVE_KEY = "__paseoSwitcher";
 /** A tap shorter than this switches without ever drawing the strip. */
 const SHOW_DELAY_MS = 110;
 const POLL_ROUTE_MS = 300;
@@ -226,14 +242,24 @@ export interface Switcher {
 }
 
 export interface SwitcherOptions {
-  /** Asks this plugin's daemon side for a project's icon (see shared/icons.ts). */
+  /** Asks this plugin's daemon side for a project's icon (see shared/icons.ts). Reaches this installation's host only. */
   projectIcon?: (rootPath: string) => Promise<ProjectIconAnswer>;
+  /** Borrows any online host's API (the SDK's `getPaseoClient`); throws for an unknown or offline host. */
+  getPaseoClient?: (serverId: string) => Paseo;
 }
 
-export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Switcher {
-  const doc = g.document;
-  const win = g.window;
-  const noop: Switcher = {
+/** One host's installation of the plugin. */
+interface Installation {
+  paseo: Paseo;
+  options: SwitcherOptions;
+  /** Told when the shortcut changes, so this installation's Command Center title can follow. */
+  listeners: Set<(shortcut: Shortcut) => void>;
+  /** A workspace ID this installation's own host lists (null: none), to learn which host its RPCs reach. */
+  probe?: string | null;
+  probedAt?: number;
+}
+
+const noop: Switcher = {
     open() {},
     getLimit: () => DEFAULT_LIMIT,
     setLimit() {},
@@ -251,16 +277,62 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     setCountMessages() {},
     getRepoIcons: () => DEFAULT_REPO_ICONS,
     setRepoIcons() {},
-    onShortcutChange: () => () => {},
-    dispose() {},
-  };
-  if (!doc || !win) return noop;
+  onShortcutChange: () => () => {},
+  dispose() {},
+};
 
-  // Each connected host installs the plugin; only one switcher may own the keyboard.
-  g.__paseoSwitcher?.dispose();
+/**
+ * Installs the plugin for one host. Paseo runs the plugin once per connected host, but only one switcher
+ * may handle the keys: the newest installation's code runs it, and it reads every host's data itself.
+ * It stays up while any installation is live, and goes when the last one is disposed.
+ */
+export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Switcher {
+  if (!g.document || !g.window) return noop;
+  const installs: Installation[] = Array.isArray(g[INSTALLS_KEY]) ? g[INSTALLS_KEY] : (g[INSTALLS_KEY] = []);
+  const mine: Installation = { paseo, options, listeners: new Set() };
+  installs.push(mine);
+  createSwitcher(installs);
+  const active = (): Switcher => g[ACTIVE_KEY] ?? noop;
+  return {
+    open: () => active().open(),
+    getLimit: () => active().getLimit(),
+    setLimit: (v) => active().setLimit(v),
+    getLayout: () => active().getLayout(),
+    setLayout: (v) => active().setLayout(v),
+    getShortcut: () => active().getShortcut(),
+    setShortcut: (v) => active().setShortcut(v),
+    getIncludeBackground: () => active().getIncludeBackground(),
+    setIncludeBackground: (v) => active().setIncludeBackground(v),
+    getIncludeScreens: () => active().getIncludeScreens(),
+    setIncludeScreens: (v) => active().setIncludeScreens(v),
+    getHidden: () => active().getHidden(),
+    unhide: (key) => active().unhide(key),
+    getCountMessages: () => active().getCountMessages(),
+    setCountMessages: (v) => active().setCountMessages(v),
+    getRepoIcons: () => active().getRepoIcons(),
+    setRepoIcons: (v) => active().setRepoIcons(v),
+    onShortcutChange(listener) {
+      mine.listeners.add(listener);
+      return () => void mine.listeners.delete(listener);
+    },
+    dispose() {
+      const at = installs.indexOf(mine);
+      if (at === -1) return;
+      installs.splice(at, 1);
+      mine.listeners.clear();
+      // Another host's installation keeps the switcher; the last one takes it down.
+      if (!installs.length) active().dispose();
+    },
+  };
+}
+
+function createSwitcher(installs: Installation[]): Switcher {
+  const doc = g.document;
+  const win = g.window;
+  // Only one switcher may own the keyboard: this one replaces the last (which leaves its lists behind).
+  g[ACTIVE_KEY]?.dispose();
   // While the switcher is open it owns the keyboard, so typing to filter never fires a Paseo shortcut.
   let shortcut = parseShortcut(readJson(SHORTCUT_KEY, DEFAULT_SHORTCUT));
-  const shortcutListeners = new Set<(shortcut: Shortcut) => void>();
   const keys = claimKeys(() => open, () => shortcut);
 
   let visits: Visits = parseVisits(readJson(VISITS_KEY, null)) ?? migrateMru(readJson(MRU_KEY, []), Date.now());
@@ -293,13 +365,12 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   const carried = carriedLists(g[CARRY_KEY], includeBackground);
   const carriedIconCache = g[CARRY_KEY]?.repoIcons;
   g[CARRY_KEY] = undefined;
-  let workspaces: ReadonlyMap<string, WorkspaceInfo> | null = carried?.workspaces ?? null;
-  let workspacesAt = carried?.workspacesAt ?? 0;
+  /** Each host's workspaces and agents, by server ID. A host's lists are only ever read under that host. */
+  const hostData = new Map<string, HostData>(carried?.hosts ?? []);
+  /** Names of visited workspaces, for rows whose host has not answered and that have no sidebar row. */
+  let knownNames: KnownNames = parseKnownNames(readJson(NAMES_KEY, {}));
   /** The agent tab last focused in each workspace, so switching back reopens it. */
   let agentMemory = parseAgentMemory(readJson(AGENTS_KEY, {}));
-  /** The host's agents, for the "most recently active" fallback; tagged with the host they came from. */
-  let agents: { serverId: string | null; list: AgentInfo[]; capped?: boolean } | null = carried?.agents ?? null;
-  let agentsAt = carried?.agentsAt ?? 0;
   /** Show each workspace's repo icon (asked of the daemon side lazily, per project root). */
   let repoIcons = parseRepoIcons(readJson(REPO_ICONS_KEY, DEFAULT_REPO_ICONS));
   /** Answers per project root, carried across reinstalls like the lists (whatever the background setting). */
@@ -340,8 +411,6 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   } | null = null;
   /** Every match for the query; only the first MAX_LIMIT are listed. */
   let matches = 0;
-  /** The host of the loaded workspace list, for when neither the route nor the history names one. */
-  let homeServer: string | null = carried?.homeServer ?? null;
   const coarse = Boolean(win.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
 
   const style = doc.createElement("style");
@@ -394,9 +463,66 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     return screen ? pluginScreenKey(screen.serverId, screen.pluginId, screen.screenId) : null;
   }
 
-  function serverId(): string | null {
+  /** The host of the workspace or screen on show, else of the latest visit, else the app's only host. */
+  function shownHost(): string | null {
     const key = currentStopKey() ?? mru[0];
-    return key ? keyServerId(key) : homeServer;
+    if (key) return keyServerId(key);
+    const saved = savedHosts();
+    return saved.length === 1 ? saved[0] : null;
+  }
+
+  /** The app's saved hosts, connected or not. */
+  function savedHosts(): string[] {
+    const saved = readJson(HOSTS_KEY, null);
+    const list = Array.isArray(saved) ? saved : saved?.hosts;
+    if (!Array.isArray(list)) return [];
+    return list.map((h: any) => h?.serverId).filter((id: unknown): id is string => typeof id === "string" && id !== "");
+  }
+
+  /** Hosts to load: the saved ones, the one on show, and those of visited workspaces. */
+  function knownHosts(): string[] {
+    const hosts = new Set(savedHosts());
+    const shown = shownHost();
+    if (shown) hosts.add(shown);
+    for (const key of mru) if (!isPluginScreenKey(key)) hosts.add(keyServerId(key));
+    return [...hosts];
+  }
+
+  /**
+   * One host's API, borrowed through the newest installation that can. Without that SDK call (an older
+   * Paseo), only the installation's own API is known, taken to be the host on show.
+   */
+  function apiFor(host: string): Paseo | null {
+    for (let i = installs.length - 1; i >= 0; i--) {
+      const borrow = installs[i].options.getPaseoClient;
+      if (!borrow) continue;
+      try {
+        return borrow(host);
+      } catch {
+        // Unknown or offline: its rows keep what was loaded before, or their names.
+        return null;
+      }
+    }
+    const own = installs[installs.length - 1];
+    return own && host === shownHost() ? own.paseo : null;
+  }
+
+  function dataOf(host: string): HostData {
+    let data = hostData.get(host);
+    if (!data) {
+      data = { workspaces: null, workspacesAt: 0, agents: null, agentsAt: 0 };
+      hostData.set(host, data);
+    }
+    return data;
+  }
+
+  function agentsOf(host: string): { list: AgentInfo[]; capped?: boolean } | null {
+    return hostData.get(host)?.agents ?? null;
+  }
+
+  function workspaceInfo(key: string): WorkspaceInfo | null {
+    const { serverId: host, workspaceId } = splitKey(key);
+    return hostData.get(host)?.workspaces?.get(workspaceId) ?? null;
   }
 
   function setVisits(next: Visits) {
@@ -466,7 +592,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
 
   /** Folds the loaded agents' last messages into the visit times, when that setting is on. */
   function countMessageVisits() {
-    if (countMessages) setVisits(mergeMessageVisits(visits, serverId(), agents, hiddenKeys));
+    if (!countMessages) return;
+    for (const [host, data] of hostData) setVisits(mergeMessageVisits(visits, host, data.agents, hiddenKeys));
   }
 
   /** Remembers which agent tab is active in the current workspace. One query inside the pane. */
@@ -490,27 +617,40 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   /** The agent tab to reveal when switching to `key` by route, or null for Paseo's default. */
   function agentFor(key: string): string | null {
     const { serverId: server, workspaceId } = splitKey(key);
-    const list = agents && agents.serverId === server ? agents.list : null;
-    return agentToOpen(workspaceId, agentMemory[key], list);
+    return agentToOpen(workspaceId, agentMemory[key], agentsOf(server)?.list ?? null);
   }
 
   // ---- workspace data -------------------------------------------------------------------------
 
-  let loading: Promise<void> | null = null;
+  /** Loads in flight, by host. */
+  const loadingWorkspaces = new Map<string, Promise<boolean>>();
+  const loadingAgents = new Map<string, Promise<boolean>>();
   /** Bumped when the background setting changes, so a load that started before it is discarded. */
   let generation = 0;
-  function loadWorkspaces(): Promise<void> {
+
+  /** Reloads the workspaces of every known host whose list is older than `maxAge`; true when any landed. */
+  function loadWorkspaces(maxAge = 0): Promise<boolean> {
+    const now = Date.now();
+    const hosts = knownHosts().filter((host) => now - (hostData.get(host)?.workspacesAt ?? 0) > maxAge);
+    return Promise.all(hosts.map(loadHostWorkspaces)).then((done) => done.some(Boolean));
+  }
+
+  function loadHostWorkspaces(host: string): Promise<boolean> {
+    const running = loadingWorkspaces.get(host);
+    if (running) return running;
+    const api = apiFor(host);
+    if (!api) return Promise.resolve(false);
     const mine = generation;
     const wanted = includeBackground;
-    const promise: Promise<void> = (loading ??= listWithBackgroundFallback(wanted, (include) =>
-      paseo.workspaces.list({
+    const promise: Promise<boolean> = listWithBackgroundFallback(wanted, (include) =>
+      api.workspaces.list({
         page: { limit: 200 },
         sort: [{ key: "activity_at", direction: "desc" }],
         ...(include ? { filter: { includeBackground: true } } : {}),
       }),
     )
       .then(({ value: result, includedBackground }) => {
-        if (mine !== generation) return;
+        if (mine !== generation) return false;
         const next = new Map<string, WorkspaceInfo>();
         for (const w of result.entries) {
           if (!shouldListWorkspace(w, includedBackground)) continue;
@@ -539,32 +679,60 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
               : null,
           });
         }
-        workspaces = next;
-        workspacesAt = Date.now();
-        if (!homeServer) homeServer = findHost(next);
+        const data = dataOf(host);
+        data.workspaces = next;
+        data.workspacesAt = Date.now();
+        noteNames();
+        return true;
       })
       .catch(() => {
-        // Keep the previous list; cards fall back to sidebar labels.
+        // Keep the previous list; rows fall back to sidebar labels and remembered names.
+        return false;
       })
       .finally(() => {
-        if (loading === promise) loading = null;
-      }));
+        if (loadingWorkspaces.get(host) === promise) loadingWorkspaces.delete(host);
+      });
+    loadingWorkspaces.set(host, promise);
     return promise;
   }
 
-  let loadingAgents: Promise<void> | null = null;
-  function loadAgents(): Promise<void> {
+  /** Keeps the names of visited workspaces for when their host is offline. */
+  function noteNames() {
+    const next = rememberNames(knownNames, visits, loadedWorkspaces(hostData));
+    if (next === knownNames) return;
+    knownNames = next;
+    writeJson(NAMES_KEY, knownNames);
+  }
+
+  /** Reloads the agents of every known host whose list is older than `maxAge`. */
+  function loadAgents(maxAge = 0): Promise<boolean> {
+    const hosts = knownHosts().filter((host) => agentsStale(host, maxAge));
+    return Promise.all(hosts.map(loadHostAgents)).then((done) => done.some(Boolean));
+  }
+
+  function agentsStale(host: string, maxAge: number): boolean {
+    return !loadingAgents.has(host) && Date.now() - (hostData.get(host)?.agentsAt ?? 0) > maxAge;
+  }
+
+  function loadHostAgents(host: string): Promise<boolean> {
+    const running = loadingAgents.get(host);
+    if (running) return running;
+    const api = apiFor(host);
+    if (!api) {
+      chatsFailed(host);
+      return Promise.resolve(false);
+    }
     const mine = generation;
     const wanted = includeBackground;
-    const promise: Promise<void> = (loadingAgents ??= listWithBackgroundFallback(wanted, (include) =>
-      paseo.agents.list({
+    const promise: Promise<boolean> = listWithBackgroundFallback(wanted, (include) =>
+      api.agents.list({
         page: { limit: 200 },
         sort: [{ key: "updated_at", direction: "desc" }],
         ...(include ? { filter: { includeBackground: true } } : {}),
       }),
     )
       .then(({ value: result }) => {
-        if (mine !== generation) return;
+        if (mine !== generation) return false;
         const list: AgentInfo[] = [];
         for (const { agent } of result.entries) {
           if (agent.archivedAt || agent.internal) continue;
@@ -592,37 +760,36 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
           });
         }
         // One page of the host's most recently changed agents; Paseo cannot list one workspace's.
-        agents = { serverId: serverId(), list, capped: Boolean(result.pageInfo?.hasMore) };
-        agentsAt = Date.now();
+        const data = dataOf(host);
+        data.agents = { list, capped: Boolean(result.pageInfo?.hasMore) };
+        data.agentsAt = Date.now();
         const before = visits;
         countMessageVisits();
-        if (drill) drill.failed = false;
-        if (root && drill) refreshChats();
+        const drilled = drill && splitKey(drill.key).serverId === host;
+        if (drilled && drill) drill.failed = false;
+        if (root && drilled) refreshChats();
         if (root && visits !== before) refreshCardsAndRender();
-        else if (root && drill) render();
+        else if (root && drilled) render();
+        return true;
       })
       .catch(() => {
         // Keep the previous list; switching then uses only the remembered agent. An open chat list
         // stops waiting and says it could not load.
-        if (drill) {
-          drill.failed = true;
-          if (root) render();
-        }
+        chatsFailed(host);
+        return false;
       })
       .finally(() => {
-        if (loadingAgents === promise) loadingAgents = null;
-      }));
+        if (loadingAgents.get(host) === promise) loadingAgents.delete(host);
+      });
+    loadingAgents.set(host, promise);
     return promise;
   }
 
-  function findHost(list: Map<string, WorkspaceInfo>): string | null {
-    for (const id of list.keys()) {
-      const row = doc.querySelector(`[data-testid^="${ROW_PREFIX}"][data-testid$=":${id}"]`);
-      if (row) return splitKey(row.getAttribute("data-testid").slice(ROW_PREFIX.length)).serverId;
-    }
-    const saved = readJson(HOSTS_KEY, null);
-    const hosts = Array.isArray(saved) ? saved : saved?.hosts;
-    return Array.isArray(hosts) && hosts.length === 1 && typeof hosts[0]?.serverId === "string" ? hosts[0].serverId : null;
+  /** An open chat list of this host stops waiting and says it could not load. */
+  function chatsFailed(host: string) {
+    if (!drill || splitKey(drill.key).serverId !== host) return;
+    drill.failed = true;
+    if (root) render();
   }
 
   // ---- thumbnails -------------------------------------------------------------------------------
@@ -920,7 +1087,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     open = true;
     query = "";
     drill = null;
-    cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null, hiddenKeys);
+    cards = buildCards(mru, loadedWorkspaces(hostData), limit, includeScreens ? screens : null, hiddenKeys);
     index = direction === 1 ? initialIndex(cards, currentStopKey()) : wrap(-1, cards.length);
     clearTimeout(showTimer);
     // A quick tap flips to the previous workspace without drawing anything.
@@ -930,12 +1097,10 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   function show() {
     if (!open) return;
     render();
-    if (Date.now() - agentsAt > WORKSPACES_STALE_MS) void loadAgents();
-    if (Date.now() - workspacesAt > WORKSPACES_STALE_MS) {
-      void loadWorkspaces().then(() => {
-        if (root) refreshCardsAndRender();
-      });
-    }
+    void loadAgents(WORKSPACES_STALE_MS);
+    void loadWorkspaces(WORKSPACES_STALE_MS).then((landed) => {
+      if (landed && root) refreshCardsAndRender();
+    });
   }
 
   /** Rebuilds the open list after new data landed, keeping the selected card if it is still there. */
@@ -951,10 +1116,10 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
 
   function refreshCards() {
     if (!query) {
-      cards = buildCards(mru, serverId(), workspaces, limit, includeScreens ? screens : null, hiddenKeys);
+      cards = buildCards(mru, loadedWorkspaces(hostData), limit, includeScreens ? screens : null, hiddenKeys);
       return;
     }
-    const all = filterCards(query, mru, serverId(), workspaces, Infinity);
+    const all = filterCards(query, mru, loadedWorkspaces(hostData), Infinity);
     matches = all.length;
     cards = all.slice(0, MAX_LIMIT);
   }
@@ -999,12 +1164,12 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   /** Replaces the list with the selected workspace's chats. Plugin screens have none. */
   function drillIn() {
     const card = cards[index];
-    if (!card || !canDrillInto(card, serverId())) return;
-    drill = { key: card.key, name: card.info?.name ?? rowLabel(card.key) ?? "Workspace", chats: [], total: 0, loaded: false, failed: false, index: 0, query: "" };
+    if (!card || !canDrillInto(card)) return;
+    drill = { key: card.key, name: cardName(card), chats: [], total: 0, loaded: false, failed: false, index: 0, query: "" };
     refreshChats();
     clearTimeout(showTimer);
     render();
-    if (!drill.loaded || agentsStale(WORKSPACES_STALE_MS)) void loadAgents();
+    if (!drill.loaded || agentsStale(card.serverId, WORKSPACES_STALE_MS)) void loadHostAgents(card.serverId);
   }
 
   /** Back to the workspaces, with the selection on the workspace you came from. */
@@ -1018,7 +1183,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     if (!drill) return;
     const selected = drill.chats[drill.index]?.id;
     const { serverId: server, workspaceId } = splitKey(drill.key);
-    const list = agents && agents.serverId === server ? agents.list : null;
+    const list = agentsOf(server)?.list ?? null;
     const all = chatsForWorkspace(list, workspaceId, agentMemory[drill.key]?.agentId);
     drill.loaded = list !== null;
     drill.total = all.length;
@@ -1190,32 +1355,68 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     requestRepoIcons();
   }
 
-  /** Asks for the repo icons of the workspaces on show, after this render, one request per project root. */
+  /**
+   * Asks for the repo icons of the workspaces on show, after this render, one request per project root.
+   * The RPC reaches only the daemon of the installation that sends it, so each host's roots go to that
+   * host's installation; a host that does not run this plugin keeps the branch icons.
+   */
   function requestRepoIcons() {
-    const ask = options.projectIcon;
-    if (!repoIcons || !ask) return;
-    const host = serverId();
-    const roots = host ? repoIconRoots(cards, repoIconCache, repoIconPending, Date.now(), host) : [];
-    if (!host || !roots.length) return;
-    for (const root of roots) repoIconPending.add(repoIconKey(host, root));
-    setTimeout(() => {
-      for (const root of roots) {
-        const key = repoIconKey(host, root);
-        Promise.resolve()
-          .then(() => ask(root))
-          // A failed request is asked again in a minute, not kept as "no icon" for a day.
-          .then(
-            (answer) => answer,
-            () => null,
-          )
-          .then((answer) => {
-            const url = repoIconUrl(answer?.icon);
-            repoIconPending.delete(key);
-            repoIconCache.set(key, { url, at: Date.now(), ttl: repoIconTtl(answer) });
-            if (url && repoIcons && cards.some((c) => c.serverId === host && c.info?.projectRoot === root)) render();
-          });
-      }
-    }, 0);
+    if (!repoIcons) return;
+    for (const inst of installs) {
+      const ask = inst.options.projectIcon;
+      const host = ask ? installHost(inst) : null;
+      if (!ask || !host) continue;
+      const roots = repoIconRoots(cards, repoIconCache, repoIconPending, Date.now(), host);
+      if (!roots.length) continue;
+      for (const root of roots) repoIconPending.add(repoIconKey(host, root));
+      setTimeout(() => {
+        for (const root of roots) {
+          const key = repoIconKey(host, root);
+          Promise.resolve()
+            .then(() => ask(root))
+            // A failed request is asked again in a minute, not kept as "no icon" for a day.
+            .then(
+              (answer) => answer,
+              () => null,
+            )
+            .then((answer) => {
+              const url = repoIconUrl(answer?.icon);
+              repoIconPending.delete(key);
+              repoIconCache.set(key, { url, at: Date.now(), ttl: repoIconTtl(answer) });
+              if (url && repoIcons && cards.some((c) => c.serverId === host && c.info?.projectRoot === root)) render();
+            });
+        }
+      }, 0);
+    }
+  }
+
+  /**
+   * The host an installation runs on, learned from one workspace ID its own API lists. With no host API
+   * (an older Paseo) there is one installation, taken to be the host on show.
+   */
+  function installHost(inst: Installation): string | null {
+    if (!installs.some((i) => i.options.getPaseoClient)) return installs.length === 1 ? shownHost() : null;
+    if (inst.probe === undefined) probeInstall(inst);
+    const id = inst.probe;
+    if (!id) return null;
+    for (const [host, data] of hostData) if (data.workspaces?.has(id)) return host;
+    return null;
+  }
+
+  function probeInstall(inst: Installation) {
+    if (Date.now() - (inst.probedAt ?? 0) < REPO_ICON_RETRY_MS) return;
+    inst.probedAt = Date.now();
+    Promise.resolve()
+      .then(() => inst.paseo.workspaces.list({ page: { limit: 1 }, sort: [{ key: "activity_at", direction: "desc" }] }))
+      .then(
+        (result) => {
+          inst.probe = result.entries[0]?.id ?? null;
+          if (root && inst.probe) render();
+        },
+        () => {
+          // Asked again after REPO_ICON_RETRY_MS.
+        },
+      );
   }
 
   /** The repo icon of a workspace card, when one is known and the setting is on. */
@@ -1261,7 +1462,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     header.appendChild(el("kbd", "pws-kbd", "←"));
     header.appendChild(el("span", "pws-drill-name", drill?.name ?? ""));
     const total = drill?.total ?? 0;
-    header.appendChild(el("span", "pws-drill-count", chatCountLabel(total, { loaded: Boolean(drill?.loaded), capped: Boolean(agents?.capped) })));
+    const capped = drill ? Boolean(agentsOf(splitKey(drill.key).serverId)?.capped) : false;
+    header.appendChild(el("span", "pws-drill-count", chatCountLabel(total, { loaded: Boolean(drill?.loaded), capped })));
     return header;
   }
 
@@ -1324,7 +1526,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     if (query) {
       box.appendChild(el("div", "pws-empty-title", `No workspace matches “${query}”`));
       box.appendChild(el("div", "pws-empty-text", "Names, projects, branches and pull request numbers are searched."));
-    } else if (!workspaces) {
+    } else if (![...hostData.values()].some((d) => d.workspaces)) {
       const title = el("div", "pws-empty-title pws-loading");
       title.appendChild(el("span", "pws-spin"));
       title.appendChild(el("span", "", "Loading workspaces"));
@@ -1373,9 +1575,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       return bar;
     }
     const arrows = listShown() ? ["↑", "↓"] : ["←", "→"];
-    // Only workspaces on this host have chats to list; with none on show, "chats" is left out.
-    const host = serverId();
-    const chats = cards.some((c) => canDrillInto(c, host)) ? () => keys([listShown() ? "→" : "↓"], "chats") : () => {};
+    // Only workspaces whose host answered have chats to list; with none on show, "chats" is left out.
+    const chats = cards.some((c) => canDrillInto(c)) ? () => keys([listShown() ? "→" : "↓"], "chats") : () => {};
     if (query && !cards.length) {
       keys(["Backspace"], "edit");
       keys(["Esc"], "clear");
@@ -1454,14 +1655,14 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
 
   function renderCard(card: Card, i: number): Node {
     const info = card.info;
-    const name = card.screen?.title ?? info?.name ?? rowLabel(card.key) ?? "Workspace";
+    const name = cardName(card);
     const node = option(card, i, "pws-card", name);
 
     const frame = el("div", "pws-thumb");
     const canvas = thumbs.get(card.key);
     // A thumbnail from the other theme would flash; the placeholder reads better until it refreshes.
     if (canvas && canvas.dataset.dark === String(dark)) frame.appendChild(canvas);
-    else frame.appendChild(placeholder(card, info?.project ?? null));
+    else frame.appendChild(placeholder(card, info?.project ?? knownNames[card.key]?.project ?? null));
     node.appendChild(frame);
 
     const title = el("div", "pws-title");
@@ -1486,7 +1687,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
   /** A list row: state dot, name and where it lives, what its agent is doing, and compact facts. */
   function renderRow(card: Card, i: number, at: number): Node {
     const info = card.info;
-    const name = card.screen?.title ?? info?.name ?? rowLabel(card.key) ?? "Workspace";
+    const name = cardName(card);
     const node = option(card, i, "pws-card pws-row", name);
     const facts = rowFacts(info, at, card.screen ? { screen: card.screen, visitedAt: visits[card.key] } : undefined);
 
@@ -1604,8 +1805,8 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
    * then replaces the global.
    */
   function botAvatar(card: Card, px: number): Node | null {
-    if (card.screen || card.serverId !== agents?.serverId) return null;
-    const botId = botIdForWorkspace(agents?.list, card.workspaceId);
+    if (card.screen) return null;
+    const botId = botIdForWorkspace(agentsOf(card.serverId)?.list, card.workspaceId);
     const api = botAvatarsApi();
     if (!botId || !api) return null;
     let found: { name?: string; svg?: string; imageUrl?: string } | null = null;
@@ -1703,6 +1904,11 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     return doc.querySelector(rowSelector(key))?.getAttribute("aria-label") ?? null;
   }
 
+  /** A row's name: its host's data, else its sidebar row, else the name last seen; "Workspace" only when none is known. */
+  function cardName(card: Card): string {
+    return card.screen?.title ?? card.info?.name ?? rowLabel(card.key) ?? knownNames[card.key]?.name ?? "Workspace";
+  }
+
   function isDark(surface: string): boolean {
     const match = /(\d+),\s*(\d+),\s*(\d+)/.exec(surface);
     if (!match) return false;
@@ -1746,7 +1952,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
         layout: listShown() ? "list" : "strip",
         drilled: Boolean(drill),
         query: filter,
-        canDrill: canDrillInto(card, serverId()),
+        canDrill: canDrillInto(card),
         hasSelection: Boolean(card),
         metaTypes: SHORTCUTS[shortcut].modifier === "Meta",
       },
@@ -1802,15 +2008,10 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     }
     // A message sent from a screen that isn't a workspace page (a bot chat, say) is only seen
     // through the agent list, so keep it fresh while the switcher is closed.
-    if (countMessages && !open && !doc.hidden && Date.now() >= quietUntil && agentsStale(AGENTS_BACKGROUND_MS)) {
-      whenIdle(() => {
-        if (agentsStale(AGENTS_BACKGROUND_MS)) void loadAgents();
-      });
+    if (countMessages && !open && !doc.hidden && Date.now() >= quietUntil && knownHosts().some((h) => agentsStale(h, AGENTS_BACKGROUND_MS))) {
+      whenIdle(() => void loadAgents(AGENTS_BACKGROUND_MS));
     }
   }, REFRESH_MS);
-  function agentsStale(ms: number): boolean {
-    return !loadingAgents && Date.now() - agentsAt > ms;
-  }
   syncRoute();
   void loadWorkspaces();
   void loadAgents();
@@ -1835,14 +2036,15 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       writeJson(BACKGROUND_KEY, value);
       // The cached list was built for the old setting: drop it so the next open reloads.
       generation++;
-      loading = null;
-      workspacesAt = 0;
-      loadingAgents = null;
-      agentsAt = 0;
-      if (workspaces) {
+      loadingWorkspaces.clear();
+      loadingAgents.clear();
+      for (const data of hostData.values()) {
+        data.workspacesAt = 0;
+        data.agentsAt = 0;
+        if (!data.workspaces) continue;
         const next = new Map<string, WorkspaceInfo>();
-        for (const [id, w] of workspaces) if (value || !w.background) next.set(id, w);
-        workspaces = next;
+        for (const [id, w] of data.workspaces) if (value || !w.background) next.set(id, w);
+        data.workspaces = next;
       }
     },
     getIncludeScreens: () => includeScreens,
@@ -1862,7 +2064,7 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       hiddenKeys.map((key) => {
         const screen = parsePluginScreenKey(key);
         if (screen) return { key, title: screens[key]?.title ?? screenTitle(null, screen.pluginId), subtitle: `Plugin · ${prettifyPluginId(screen.pluginId)}` };
-        const info = workspaces?.get(splitKey(key).workspaceId);
+        const info = workspaceInfo(key) ?? knownNames[key];
         return { key, title: info?.name ?? "Workspace", subtitle: info?.project ?? "" };
       }),
     unhide(key) {
@@ -1892,16 +2094,12 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
     setShortcut(next) {
       shortcut = parseShortcut(next);
       writeJson(SHORTCUT_KEY, shortcut);
-      for (const listener of shortcutListeners) listener(shortcut);
+      for (const inst of installs) for (const listener of inst.listeners) listener(shortcut);
     },
-    onShortcutChange(listener) {
-      shortcutListeners.add(listener);
-      return () => void shortcutListeners.delete(listener);
-    },
+    onShortcutChange: () => () => {},
     dispose() {
       close();
-      g[CARRY_KEY] = { includeBackground, workspaces, workspacesAt, homeServer, agents, agentsAt, repoIcons: repoIconCache };
-      shortcutListeners.clear();
+      g[CARRY_KEY] = { includeBackground, hosts: hostData, repoIcons: repoIconCache };
       clearInterval(routeTimer);
       clearInterval(refreshTimer);
       observer.disconnect();
@@ -1915,10 +2113,10 @@ export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Sw
       host.remove();
       thumbs.clear();
       pending.clear();
-      if (g.__paseoSwitcher === api) g.__paseoSwitcher = undefined;
+      if (g[ACTIVE_KEY] === api) g[ACTIVE_KEY] = undefined;
     },
   };
-  g.__paseoSwitcher = api;
+  g[ACTIVE_KEY] = api;
   return api;
 }
 

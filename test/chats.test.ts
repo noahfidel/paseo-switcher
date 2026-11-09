@@ -89,13 +89,12 @@ const wsCard = (serverId: string, info = true): Card => ({
   info: info ? { id: "w", name: "w", project: "p", branch: null, status: "done", additions: 0, deletions: 0, activityAt: 0 } : null,
 });
 
-test("canDrillInto: only a workspace on the current host with its data loaded", () => {
-  assert.equal(canDrillInto(wsCard("s"), "s"), true);
-  assert.equal(canDrillInto(wsCard("other"), "s"), false);
-  assert.equal(canDrillInto(wsCard("s", false), "s"), false);
-  assert.equal(canDrillInto(wsCard("s"), null), false);
-  assert.equal(canDrillInto({ key: "plugin-screen|s|p|x", serverId: "s", workspaceId: "", info: null, screen: { pluginId: "p", screenId: "x", title: "X" } } as Card, "s"), false);
-  assert.equal(canDrillInto(undefined, "s"), false);
+test("canDrillInto: any workspace whose host's data has loaded, on whichever host", () => {
+  assert.equal(canDrillInto(wsCard("s")), true);
+  assert.equal(canDrillInto(wsCard("other")), true);
+  assert.equal(canDrillInto(wsCard("s", false)), false);
+  assert.equal(canDrillInto({ key: "plugin-screen|s|p|x", serverId: "s", workspaceId: "", info: null, screen: { pluginId: "p", screenId: "x", title: "X" } } as Card), false);
+  assert.equal(canDrillInto(undefined), false);
 });
 
 test("chatListState: loading until the agents load or fail, then the list, empty, failed or no match", () => {

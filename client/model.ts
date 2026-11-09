@@ -530,17 +530,17 @@ export function userMessageAt(agent: {
 }
 
 /**
- * Counts the last message you sent in each workspace as a visit at that time. Only agents listed
- * for the host in question count, and only their `lastUserMessageAt`; agent output never does.
+ * Counts the last message you sent in each workspace as a visit at that time. `agents` is the agent
+ * list of the host `serverId`; and only their `lastUserMessageAt`; agent output never does.
  * Returns `visits` itself when nothing moved.
  */
 export function mergeMessageVisits(
   visits: Visits,
   serverId: string | null,
-  agents: { serverId: string | null; list: readonly AgentInfo[] } | null,
+  agents: { list: readonly AgentInfo[] } | null | undefined,
   hidden: readonly string[] = [],
 ): Visits {
-  if (!serverId || !agents || agents.serverId !== serverId) return visits;
+  if (!serverId || !agents) return visits;
   let next: Visits | null = null;
   for (const agent of agents.list) {
     const at = agent.lastUserMessageAt;
@@ -566,10 +566,16 @@ export function parseCountMessages(value: unknown): boolean {
  * dropped once the workspace list has loaded. Until enough have been visited, the rest of the
  * selected host's workspaces fill in by latest activity.
  */
+/**
+ * Loaded workspaces per host: server ID, then workspace ID. Paseo runs this plugin once per connected
+ * host and every host has its own workspaces, so a list is only ever read under the host it came from.
+ * A host missing here has not loaded (or cannot be reached).
+ */
+export type HostWorkspaces = ReadonlyMap<string, ReadonlyMap<string, WorkspaceInfo>>;
+
 export function buildCards(
   mru: readonly string[],
-  serverId: string | null,
-  workspaces: ReadonlyMap<string, WorkspaceInfo> | null,
+  hosts: HostWorkspaces | null,
   limit: number,
   screens?: Screens | null,
   hidden: readonly string[] = [],
@@ -584,19 +590,25 @@ export function buildCards(
       continue;
     }
     const parts = splitKey(key);
-    const sameHost = parts.serverId === serverId;
-    const info = sameHost ? workspaces?.get(parts.workspaceId) ?? null : null;
-    if (workspaces && sameHost && !info) continue;
+    const loaded = hosts?.get(parts.serverId);
+    const info = loaded?.get(parts.workspaceId) ?? null;
+    // Gone from a host that has loaded (archived or deleted); a host not loaded yet keeps its rows.
+    if (loaded && !info) continue;
     cards.push({ key, ...parts, info });
     seen.add(key);
   }
-  if (serverId && workspaces && cards.length < limit) {
-    const rest = [...workspaces.values()]
-      .filter((w) => !seen.has(workspaceKey(serverId, w.id)) && !hidden.includes(workspaceKey(serverId, w.id)))
-      .sort((a, b) => b.activityAt - a.activityAt);
-    for (const info of rest) {
+  if (hosts && cards.length < limit) {
+    const rest: Card[] = [];
+    for (const [serverId, workspaces] of hosts) {
+      for (const info of workspaces.values()) {
+        const key = workspaceKey(serverId, info.id);
+        if (!seen.has(key) && !hidden.includes(key)) rest.push({ key, serverId, workspaceId: info.id, info });
+      }
+    }
+    rest.sort((a, b) => (b.info?.activityAt ?? 0) - (a.info?.activityAt ?? 0));
+    for (const card of rest) {
       if (cards.length >= limit) break;
-      cards.push({ key: workspaceKey(serverId, info.id), serverId, workspaceId: info.id, info });
+      cards.push(card);
     }
   }
   return cards;
@@ -642,18 +654,12 @@ function startsWord(text: string, at: number): boolean {
  * words. Names that match at the start of a word come first; ties keep recency (visit order, then
  * latest activity), so the workspace you were just in stays near the top.
  */
-export function filterCards(
-  query: string,
-  mru: readonly string[],
-  serverId: string | null,
-  workspaces: ReadonlyMap<string, WorkspaceInfo> | null,
-  max = MAX_LIMIT,
-): Card[] {
+export function filterCards(query: string, mru: readonly string[], hosts: HostWorkspaces | null, max = MAX_LIMIT): Card[] {
   const words = queryWords(query);
-  if (!words.length || !serverId || !workspaces) return [];
+  if (!words.length || !hosts) return [];
   const recent = new Map(mru.map((key, i) => [key, i]));
   const scored: Array<{ card: Card; rank: number; recency: number; activity: number }> = [];
-  for (const info of workspaces.values()) {
+  for (const [serverId, workspaces] of hosts) for (const info of workspaces.values()) {
     const text = haystack(info);
     if (!words.every((w) => text.includes(w))) continue;
     const name = info.name.toLowerCase();
@@ -748,11 +754,11 @@ export function chatsForWorkspace(agents: readonly AgentInfo[] | null | undefine
 }
 
 /**
- * A row whose chats can be listed: a workspace with its data loaded, on the host this window shows (the
- * agent list is that host's alone). Plugin screens have no chats.
+ * A row whose chats can be listed: a workspace with its data loaded, so its host answered (its chats come
+ * from that host's own agent list). Plugin screens have no chats.
  */
-export function canDrillInto(card: Card | undefined, currentServerId: string | null): boolean {
-  return Boolean(card && !card.screen && card.info && currentServerId && card.serverId === currentServerId);
+export function canDrillInto(card: Card | undefined): boolean {
+  return Boolean(card && !card.screen && card.info);
 }
 
 /** What the chat list shows: the chats, or why there are none. A failed load never leaves it loading. */
@@ -1159,6 +1165,15 @@ export function parseIncludeBackground(value: unknown): boolean {
   return typeof value === "boolean" ? value : DEFAULT_INCLUDE_BACKGROUND;
 }
 
+/** What was loaded from one host, and when. */
+export interface HostData {
+  workspaces: ReadonlyMap<string, WorkspaceInfo> | null;
+  workspacesAt: number;
+  /** `capped`: the host had more agents than one page, so a workspace's oldest chats may be missing. */
+  agents: { list: AgentInfo[]; capped?: boolean } | null;
+  agentsAt: number;
+}
+
 /**
  * What a switcher had loaded when it was disposed. Paseo re-runs the plugin after a route change made
  * outside its router (the switcher reopens plugin screens and hidden workspaces that way), so without
@@ -1167,21 +1182,23 @@ export function parseIncludeBackground(value: unknown): boolean {
  */
 export interface CarriedLists {
   includeBackground: boolean;
-  workspaces: ReadonlyMap<string, WorkspaceInfo> | null;
-  workspacesAt: number;
-  homeServer: string | null;
-  /** `capped`: the host had more agents than one page, so a workspace's oldest chats may be missing. */
-  agents: { serverId: string | null; list: AgentInfo[]; capped?: boolean } | null;
-  agentsAt: number;
+  hosts: ReadonlyMap<string, HostData>;
 }
 
-/** The previous switcher's lists, unless they were loaded under the other background setting. */
+/** The previous switcher's lists, unless they were loaded under the other background setting or in an older shape. */
 export function carriedLists(saved: unknown, includeBackground: boolean): CarriedLists | null {
   if (!saved || typeof saved !== "object") return null;
   const s = saved as CarriedLists;
   if (s.includeBackground !== includeBackground) return null;
-  if (s.workspaces !== null && !(s.workspaces instanceof Map)) return null;
+  if (!(s.hosts instanceof Map)) return null;
   return s;
+}
+
+/** The workspace lists of the hosts that have loaded one. */
+export function loadedWorkspaces(hosts: ReadonlyMap<string, HostData> | null): HostWorkspaces {
+  const out = new Map<string, ReadonlyMap<string, WorkspaceInfo>>();
+  if (hosts) for (const [serverId, data] of hosts) if (data.workspaces) out.set(serverId, data.workspaces);
+  return out;
 }
 
 /** Hosts without background support reject inclusive discovery with a message that names it. */
@@ -1205,4 +1222,40 @@ export async function listWithBackgroundFallback<T>(
     if (!isBackgroundUnsupported(error)) throw error;
     return { value: await list(false), includedBackground: false };
   }
+}
+
+/** The last name and project seen for each visited workspace, so a row whose host is offline is never blank. */
+export type KnownNames = Record<string, { name: string; project: string }>;
+
+export function parseKnownNames(value: unknown): KnownNames {
+  const out: KnownNames = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  for (const [key, entry] of Object.entries(value as Record<string, any>)) {
+    if (entry && typeof entry.name === "string" && typeof entry.project === "string") out[key] = { name: entry.name, project: entry.project };
+  }
+  return out;
+}
+
+/**
+ * Updates the names of visited workspaces from the hosts that have loaded, and forgets keys no longer
+ * visited. Returns `names` itself when nothing changed.
+ */
+export function rememberNames(names: KnownNames, visits: Visits, hosts: HostWorkspaces): KnownNames {
+  const next: KnownNames = {};
+  let changed = false;
+  for (const key of Object.keys(visits)) {
+    if (isPluginScreenKey(key)) continue;
+    const { serverId, workspaceId } = splitKey(key);
+    const info = hosts.get(serverId)?.get(workspaceId);
+    const known = names[key];
+    if (info) {
+      if (known && known.name === info.name && known.project === info.project) next[key] = known;
+      else {
+        next[key] = { name: info.name, project: info.project };
+        changed = true;
+      }
+    } else if (known) next[key] = known;
+  }
+  if (!changed && Object.keys(next).length === Object.keys(names).length) return names;
+  return next;
 }

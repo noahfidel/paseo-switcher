@@ -63,6 +63,9 @@ import {
   SCREEN_DWELL_MS,
   type PendingScreenVisit,
   carriedLists,
+  loadedWorkspaces,
+  parseKnownNames,
+  rememberNames,
 } from "../client/model.ts";
 
 const S = "srv_a";
@@ -77,46 +80,76 @@ const info = (id: string, activityAt: number): WorkspaceInfo => ({
   activityAt,
 });
 const list = (...items: WorkspaceInfo[]) => new Map(items.map((w) => [w.id, w]));
+/** One host's loaded list, keyed by host the way the switcher keeps them. */
+const one = (ws: ReadonlyMap<string, WorkspaceInfo> | null) => (ws ? new Map([[S, ws]]) : null);
 
 test("cards are the most recent visits, capped at the limit", () => {
   const mru = ["1", "2", "3", "4", "5", "6", "7"].map((id) => `${S}:${id}`);
   const ws = list(...["1", "2", "3", "4", "5", "6", "7"].map((id, i) => info(id, i)));
   assert.deepEqual(
-    buildCards(mru, S, ws, 5).map((c) => c.workspaceId),
+    buildCards(mru, one(ws), 5).map((c) => c.workspaceId),
     ["1", "2", "3", "4", "5"],
   );
 });
 
 test("deleted workspaces drop out once the list has loaded", () => {
   const mru = [`${S}:gone`, `${S}:a`];
-  assert.deepEqual(buildCards(mru, S, list(info("a", 1)), 5).map((c) => c.workspaceId), ["a"]);
-  assert.deepEqual(buildCards(mru, S, null, 5).map((c) => c.workspaceId), ["gone", "a"], "kept before load");
+  assert.deepEqual(buildCards(mru, one(list(info("a", 1))), 5).map((c) => c.workspaceId), ["a"]);
+  assert.deepEqual(buildCards(mru, null, 5).map((c) => c.workspaceId), ["gone", "a"], "kept before load");
 });
 
 test("few visits fill in by latest activity", () => {
   const ws = list(info("a", 1), info("b", 30), info("c", 20), info("d", 10));
   assert.deepEqual(
-    buildCards([`${S}:a`], S, ws, 3).map((c) => c.workspaceId),
+    buildCards([`${S}:a`], one(ws), 3).map((c) => c.workspaceId),
     ["a", "b", "c"],
   );
 });
 
 test("visits on another host are kept without data", () => {
-  const cards = buildCards([`other:x`, `${S}:a`], S, list(info("a", 1)), 5);
+  const cards = buildCards([`other:x`, `${S}:a`], one(list(info("a", 1))), 5);
   assert.deepEqual(cards.map((c) => [c.serverId, c.workspaceId, c.info?.id ?? null]), [
     ["other", "x", null],
     [S, "a", "a"],
   ]);
 });
 
+// Paseo runs the plugin once per connected host. The workspaces of each host are kept under its server
+// ID, so a row never borrows another host's data, and the host on show never blanks the others' rows.
+test("with two hosts, each row shows its own host's workspace, whichever host is on show", () => {
+  const hosts = new Map([
+    [S, list(info("a", 1))],
+    ["srv_b", list(info("x", 2))],
+  ]);
+  const cards = buildCards([`srv_b:x`, `${S}:a`], hosts, 5);
+  assert.deepEqual(cards.map((c) => [c.key, c.info?.id ?? null]), [
+    ["srv_b:x", "x"],
+    [`${S}:a`, "a"],
+  ]);
+});
+
+test("a host that has not loaded keeps its rows without data, and the list fills from every loaded host", () => {
+  const hosts = new Map([
+    [S, list(info("a", 1), info("gone-from-a", 0))],
+    ["srv_b", list(info("x", 5), info("y", 3))],
+  ]);
+  const cards = buildCards([`srv_c:z`, `${S}:gone`, `${S}:a`], hosts, 4);
+  assert.deepEqual(cards.map((c) => [c.key, c.info?.id ?? null]), [
+    ["srv_c:z", null],
+    [`${S}:a`, "a"],
+    ["srv_b:x", "x"],
+    ["srv_b:y", "y"],
+  ]);
+});
+
 test("keys containing colons split on the last one", () => {
-  const cards = buildCards([`srv:with:colon:wks_1`], null, null, 5);
+  const cards = buildCards([`srv:with:colon:wks_1`], null, 5);
   assert.equal(cards[0]?.serverId, "srv:with:colon");
   assert.equal(cards[0]?.workspaceId, "wks_1");
 });
 
 test("the first Ctrl+Tab selects the previous workspace", () => {
-  const cards = buildCards([`${S}:a`, `${S}:b`], S, null, 5);
+  const cards = buildCards([`${S}:a`, `${S}:b`], null, 5);
   assert.equal(initialIndex(cards, `${S}:a`), 1);
   assert.equal(initialIndex(cards, `${S}:elsewhere`), 0);
   assert.equal(initialIndex(cards.slice(0, 1), `${S}:a`), 0);
@@ -165,7 +198,7 @@ test("filter matches name, project, branch and PR number, all words required", (
     { ...info("b", 2), name: "Upgrade to Postgres 17", project: "api", branch: "pg17", pr: { number: 455, state: "draft", checks: "failure", review: null } },
     { ...info("c", 3), name: "Checkout redesign", project: "storefront", branch: "checkout-v2" },
   );
-  const ids = (q: string) => filterCards(q, [], S, ws).map((c) => c.workspaceId);
+  const ids = (q: string) => filterCards(q, [], one(ws)).map((c) => c.workspaceId);
   assert.deepEqual(ids("api").sort(), ["a", "b"]);
   assert.deepEqual(ids("455"), ["b"]);
   assert.deepEqual(ids("#455"), ["b"]);
@@ -182,15 +215,14 @@ test("filter ranks word-start name matches first, then recency", () => {
     { ...info("c", 1), name: "Rates page", project: "web" },
   );
   // "b" matches only through its project, so it ranks after both name matches.
-  assert.deepEqual(filterCards("rate", [`${S}:c`], S, ws).map((c) => c.workspaceId), ["c", "a", "b"]);
-  assert.deepEqual(filterCards("rate", [], S, ws).map((c) => c.workspaceId), ["a", "c", "b"]);
+  assert.deepEqual(filterCards("rate", [`${S}:c`], one(ws)).map((c) => c.workspaceId), ["c", "a", "b"]);
+  assert.deepEqual(filterCards("rate", [], one(ws)).map((c) => c.workspaceId), ["a", "c", "b"]);
 });
 
-test("filter caps results at the number keys and needs a host and a list", () => {
+test("filter caps results at the number keys and needs a loaded list", () => {
   const ws = list(...Array.from({ length: 12 }, (_, i) => ({ ...info(String(i), i), name: `Task ${i}` })));
-  assert.equal(filterCards("task", [], S, ws).length, 9);
-  assert.deepEqual(filterCards("task", [], null, ws), []);
-  assert.deepEqual(filterCards("task", [], S, null), []);
+  assert.equal(filterCards("task", [], one(ws)).length, 9);
+  assert.deepEqual(filterCards("task", [], null), []);
 });
 
 test("match ranges are merged and sorted for highlighting", () => {
@@ -489,7 +521,7 @@ const msg = (workspaceId: string | null, lastUserMessageAt: number | null): Agen
 
 test("a message newer than a workspace's visit moves it to the front", () => {
   const visits = { [k("a")]: 300, [k("bot")]: 100 };
-  const next = mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", 500), msg("bot", 200)] });
+  const next = mergeMessageVisits(visits, S, { list: [msg("bot", 500), msg("bot", 200)] });
   assert.deepEqual(recentKeys(next), [k("bot"), k("a")]);
   assert.equal(next[k("bot")], 500);
   assert.equal(previousKey(recentKeys(next), k("a")), k("bot"));
@@ -497,28 +529,27 @@ test("a message newer than a workspace's visit moves it to the front", () => {
 
 test("a message older than the stored visit does not reorder", () => {
   const visits = { [k("a")]: 300, [k("bot")]: 250 };
-  const next = mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", 200)] });
+  const next = mergeMessageVisits(visits, S, { list: [msg("bot", 200)] });
   assert.equal(next, visits);
   assert.deepEqual(recentKeys(next), [k("a"), k("bot")]);
 });
 
 test("a workspace never visited but messaged gets added", () => {
-  const next = mergeMessageVisits({ [k("a")]: 300 }, S, { serverId: S, list: [msg("bot", 100)] });
+  const next = mergeMessageVisits({ [k("a")]: 300 }, S, { list: [msg("bot", 100)] });
   assert.deepEqual(recentKeys(next), [k("a"), k("bot")]);
 });
 
-test("agents without a message, without a workspace, or from another host change nothing", () => {
+test("agents without a message, without a workspace, or without a host change nothing", () => {
   const visits = { [k("a")]: 300 };
-  assert.equal(mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", null), msg(null, 900)] }), visits);
-  assert.equal(mergeMessageVisits(visits, S, { serverId: "srv_b", list: [msg("bot", 900)] }), visits);
-  assert.equal(mergeMessageVisits(visits, null, { serverId: null, list: [msg("bot", 900)] }), visits);
+  assert.equal(mergeMessageVisits(visits, S, { list: [msg("bot", null), msg(null, 900)] }), visits);
+  assert.equal(mergeMessageVisits(visits, null, { list: [msg("bot", 900)] }), visits);
   assert.equal(mergeMessageVisits(visits, S, null), visits);
 });
 
 test("merging messages respects the cap", () => {
   const visits: Record<string, number> = {};
   for (let i = 0; i < MAX_VISITS; i++) visits[k(`w${i}`)] = 1000 + i;
-  const next = mergeMessageVisits(visits, S, { serverId: S, list: [msg("bot", 5000), msg("stale", 1)] });
+  const next = mergeMessageVisits(visits, S, { list: [msg("bot", 5000), msg("stale", 1)] });
   const keys = recentKeys(next);
   assert.equal(keys.length, MAX_VISITS);
   assert.equal(keys[0], k("bot"));
@@ -656,7 +687,7 @@ test("plugin screens and workspaces mix by visit order within the limit", () => 
   const bots = pluginScreenKey(S, "paseo-bots", "bots");
   const mru = [`${S}:a`, board, `${S}:b`, bots, `${S}:c`];
   const screens = { [board]: { title: "Board", search: "?param.id=1" }, [bots]: { title: "Bots", search: "" } };
-  const cards = buildCards(mru, S, list(info("a", 1), info("b", 1), info("c", 1)), 4, screens);
+  const cards = buildCards(mru, one(list(info("a", 1), info("b", 1), info("c", 1))), 4, screens);
   assert.deepEqual(cards.map((c) => c.key), [`${S}:a`, board, `${S}:b`, bots]);
   assert.equal(cards[0].screen, undefined);
   assert.deepEqual(cards[1].screen, { pluginId: "flowly", screenId: "board", title: "Board", search: "?param.id=1" });
@@ -667,14 +698,14 @@ test("plugin screens and workspaces mix by visit order within the limit", () => 
 test("a screen with no stored details is skipped, and without screens no screen is listed", () => {
   const board = pluginScreenKey(S, "flowly", "board");
   const mru = [board, `${S}:a`];
-  assert.deepEqual(buildCards(mru, S, list(info("a", 1)), 5, {}).map((c) => c.key), [`${S}:a`]);
-  assert.deepEqual(buildCards(mru, S, list(info("a", 1)), 5, null).map((c) => c.key), [`${S}:a`]);
-  assert.deepEqual(buildCards(mru, S, list(info("a", 1)), 5).map((c) => c.key), [`${S}:a`]);
+  assert.deepEqual(buildCards(mru, one(list(info("a", 1))), 5, {}).map((c) => c.key), [`${S}:a`]);
+  assert.deepEqual(buildCards(mru, one(list(info("a", 1))), 5, null).map((c) => c.key), [`${S}:a`]);
+  assert.deepEqual(buildCards(mru, one(list(info("a", 1))), 5).map((c) => c.key), [`${S}:a`]);
 });
 
 test("screens fill the limit before workspaces by activity do", () => {
   const board = pluginScreenKey(S, "flowly", "board");
-  const cards = buildCards([board], S, list(info("a", 5), info("b", 9)), 2, { [board]: { title: "Board", search: "" } });
+  const cards = buildCards([board], one(list(info("a", 5), info("b", 9))), 2, { [board]: { title: "Board", search: "" } });
   assert.deepEqual(cards.map((c) => c.key), [board, `${S}:b`]);
 });
 
@@ -740,24 +771,24 @@ test("a hidden key is dropped from the order, cards and the quick tap, workspace
   assert.deepEqual(visibleKeys(mru, false, [bots]), [`${S}:a`, `${S}:b`]);
   assert.equal(previousKey(visibleKeys(mru, true, [bots]), `${S}:a`), board);
   const screens = { [bots]: { title: "Bots", search: "" }, [board]: { title: "Board", search: "" } };
-  const cards = buildCards(visibleKeys(mru, true, [bots]), S, list(info("a", 1), info("b", 1)), 5, screens);
+  const cards = buildCards(visibleKeys(mru, true, [bots]), one(list(info("a", 1), info("b", 1))), 5, screens);
   assert.deepEqual(cards.map((c) => c.key), [`${S}:a`, board, `${S}:b`]);
 });
 
 test("a hidden workspace is not used to fill the list up to the limit, and the list refills from the next ones", () => {
   const ws = list(info("a", 30), info("b", 20), info("c", 10));
   const hidden = [`${S}:a`];
-  assert.deepEqual(buildCards(visibleKeys([`${S}:b`], true, hidden), S, ws, 2, null, hidden).map((c) => c.key), [`${S}:b`, `${S}:c`]);
-  assert.deepEqual(buildCards([], S, ws, 5, null, hidden).map((c) => c.key), [`${S}:b`, `${S}:c`]);
+  assert.deepEqual(buildCards(visibleKeys([`${S}:b`], true, hidden), one(ws), 2, null, hidden).map((c) => c.key), [`${S}:b`, `${S}:c`]);
+  assert.deepEqual(buildCards([], one(ws), 5, null, hidden).map((c) => c.key), [`${S}:b`, `${S}:c`]);
 });
 
 test("filtering still finds a hidden workspace", () => {
   const ws = list(info("a", 30), info("b", 20));
-  assert.deepEqual(filterCards("a", [`${S}:a`], S, ws, 9).map((c) => c.key), [`${S}:a`]);
+  assert.deepEqual(filterCards("a", [`${S}:a`], one(ws), 9).map((c) => c.key), [`${S}:a`]);
 });
 
 test("messages to a hidden workspace do not count as visits", () => {
-  const agents = { serverId: S, list: [{ id: "x", workspaceId: "a", activityAt: 1, lastUserMessageAt: 500 }, { id: "y", workspaceId: "b", activityAt: 1, lastUserMessageAt: 600 }] };
+  const agents = { list: [{ id: "x", workspaceId: "a", activityAt: 1, lastUserMessageAt: 500 }, { id: "y", workspaceId: "b", activityAt: 1, lastUserMessageAt: 600 }] };
   const next = mergeMessageVisits({}, S, agents, [`${S}:a`]);
   assert.deepEqual(Object.keys(next), [`${S}:b`]);
 });
@@ -896,18 +927,41 @@ test("rowFacts: a plugin screen shows only its plugin name and when it was visit
 
 // Paseo re-runs the plugin after the switcher navigates by route (plugin screens, hidden workspaces),
 // so a fresh switcher opened right after a switch must start from the lists the previous one loaded.
-test("a reinstalled switcher keeps the workspace list the previous one loaded", () => {
+test("a reinstalled switcher keeps the workspace lists the previous one loaded, per host", () => {
   const ws = list(info("hidden1", 3), info("hidden2", 2));
-  const saved = { includeBackground: true, workspaces: ws, workspacesAt: 1000, homeServer: S, agents: null, agentsAt: 0 };
-  const carried = carriedLists(saved, true);
-  const cards = buildCards([`${S}:hidden1`, `${S}:hidden2`], S, carried?.workspaces ?? null, 5);
-  assert.deepEqual(cards.map((c) => c.info?.name ?? null), ["hidden1", "hidden2"]);
-  assert.equal(carried?.workspacesAt, 1000, "keeps the load time, so a stale list is still refreshed");
+  const hosts = new Map([
+    [S, { workspaces: ws, workspacesAt: 1000, agents: null, agentsAt: 0 }],
+    ["srv_b", { workspaces: null, workspacesAt: 0, agents: null, agentsAt: 0 }],
+  ]);
+  const carried = carriedLists({ includeBackground: true, hosts }, true);
+  const cards = buildCards([`${S}:hidden1`, `${S}:hidden2`, "srv_b:x"], loadedWorkspaces(carried?.hosts ?? null), 5);
+  assert.deepEqual(cards.map((c) => c.info?.name ?? null), ["hidden1", "hidden2", null]);
+  assert.equal(carried?.hosts.get(S)?.workspacesAt, 1000, "keeps the load time, so a stale list is still refreshed");
 });
 
-test("lists loaded under the other background setting, or nothing saved, are not carried", () => {
-  const saved = { includeBackground: true, workspaces: list(info("a", 1)), workspacesAt: 1, homeServer: S, agents: null, agentsAt: 0 };
-  assert.equal(carriedLists(saved, false), null);
+test("lists loaded under the other background setting, in an older shape, or nothing saved, are not carried", () => {
+  const hosts = new Map([[S, { workspaces: list(info("a", 1)), workspacesAt: 1, agents: null, agentsAt: 0 }]]);
+  assert.equal(carriedLists({ includeBackground: true, hosts }, false), null);
   assert.equal(carriedLists(undefined, true), null);
-  assert.equal(carriedLists({ includeBackground: true, workspaces: "nope" }, true), null);
+  assert.equal(carriedLists({ includeBackground: true, hosts: "nope" }, true), null);
+  // A switcher from before hosts were kept apart carried one unkeyed list; its host is unknown.
+  assert.equal(carriedLists({ includeBackground: true, workspaces: list(info("a", 1)), workspacesAt: 1, homeServer: S, agents: null, agentsAt: 0 }, true), null);
+});
+
+// A row whose host is offline (or not loaded yet) and has no sidebar row still shows a name.
+test("the names of visited workspaces are remembered per host, and only while they are visited", () => {
+  const hosts = new Map([
+    [S, list({ ...info("a", 1), name: "Alpha", project: "web" }, info("unvisited", 2))],
+    ["srv_b", list({ ...info("a", 1), name: "Other alpha", project: "api" })],
+  ]);
+  const visits = { [`${S}:a`]: 10, ["srv_b:a"]: 9, ["srv_c:z"]: 8 };
+  const names = rememberNames({ ["srv_c:z"]: { name: "Zed", project: "z" }, ["srv_old:q"]: { name: "Q", project: "" } }, visits, hosts);
+  assert.deepEqual(names, {
+    [`${S}:a`]: { name: "Alpha", project: "web" },
+    ["srv_b:a"]: { name: "Other alpha", project: "api" },
+    ["srv_c:z"]: { name: "Zed", project: "z" },
+  });
+  assert.equal(rememberNames(names, visits, hosts), names, "unchanged names keep the same object");
+  assert.deepEqual(parseKnownNames({ [`${S}:a`]: { name: "Alpha", project: "web" }, bad: { name: 3 }, also: "x" }), { [`${S}:a`]: { name: "Alpha", project: "web" } });
+  assert.deepEqual(parseKnownNames("nope"), {});
 });

@@ -32,7 +32,7 @@ Switching to a workspace that has no sidebar row (a hidden one, or one in a coll
 
 ## Cards
 
-The switcher shows your most recently visited workspaces, where a visit is opening a workspace or, by default, sending it a message. Until you have visited enough of them, the rest fill in by latest activity. Agent status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
+The switcher shows your most recently visited workspaces, where a visit is opening a workspace or, by default, sending it a message. Until you have visited enough of them, the rest fill in by latest activity. With several hosts, workspaces from every host the app can reach are listed together; a recent one whose host is offline keeps its name. Agent status follows Paseo's sidebar: a turning ring while an agent runs, amber when it needs input, red when it failed, and green when it finished and you have not looked yet.
 
 In the Thumbnails layout, thumbnails are small images of the workspace view, focused on the conversation. While you stay in a workspace, the plugin refreshes its thumbnail every couple of seconds when the browser is idle. It never does this work while you are switching. Thumbnails are kept in memory only, so a workspace you have not opened since the app started shows "No preview yet" instead. Terminals, embedded previews and images loaded from the web appear blank in thumbnails.
 

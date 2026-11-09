@@ -1,4 +1,4 @@
-import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { getPaseoClient, type PluginClientContext } from "@getpaseo/plugin/client";
 import { Platform } from "react-native";
 import { makeSettings } from "./client/settings";
 import { SHORTCUTS } from "./client/model";
@@ -8,8 +8,10 @@ import { projectIcon } from "./shared/icons";
 export default function contribute(client: PluginClientContext) {
   // The shortcut only reaches the page in the desktop app (and the web app outside a browser tab).
   if (Platform.OS !== "web") return () => {};
+  // Paseo runs this once per connected host; the switcher reads every host through getPaseoClient.
   const switcher = installSwitcher(client.paseo, {
     projectIcon: (rootPath) => client.rpc(projectIcon, { rootPath }),
+    getPaseoClient: typeof getPaseoClient === "function" ? getPaseoClient : undefined,
   });
   const switchItem = () =>
     client.addCommandCenterItem({
