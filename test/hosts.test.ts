@@ -125,10 +125,37 @@ function listing(host: string, ids: string[]) {
  * A host's API that lists the given workspaces and no agents, recording each call. With `gate`, each
  * workspace list waits for that promise; a gate that never settles is a host that never answers.
  */
-function fakeApi(host: string, ids: string[], calls: string[], gate?: () => Promise<unknown>, chats: Record<string, string[]> = {}): any {
+function fakeApi(
+  host: string,
+  ids: string[],
+  calls: string[],
+  gate?: () => Promise<unknown>,
+  chats: Record<string, string[]> = {},
+  terminals: Record<string, string[]> = {},
+  failKill = false,
+): any {
   // `chats` maps a workspace id to the idle chats it holds; archiving one removes it from the host's list.
   const alive = new Set(Object.entries(chats).flatMap(([ws, list]) => list.map((id) => `${ws}/${id}`)));
+  // `terminals` does the same for terminals; killing one removes it.
+  const shells = new Set(Object.entries(terminals).flatMap(([ws, list]) => list.map((id) => `${ws}/${id}`)));
   return {
+    terminals: {
+      list: async (options: { workspaceId?: string } = {}) => {
+        calls.push(`${host}:terminals:${options.workspaceId ?? "*"}`);
+        const entries = [...shells]
+          .map((path) => path.split("/"))
+          .filter(([ws]) => !options.workspaceId || ws === options.workspaceId)
+          .map(([workspaceId, id]) => ({ id, workspaceId, cwd: "/tmp", name: `shell ${id}` }));
+        return { entries, requestId: "r" };
+      },
+      ref: (id: string) => ({
+        kill: async () => {
+          calls.push(`${host}:kill-terminal:${id}`);
+          if (failKill) throw new Error("terminal is gone");
+          for (const path of [...shells]) if (path.endsWith(`/${id}`)) shells.delete(path);
+        },
+      }),
+    },
     workspaces: {
       list: async () => {
         calls.push(`${host}:workspaces`);
@@ -490,22 +517,132 @@ test("⇧⌫ hides the selected workspace instead of archiving it", async () => 
 
 const BS = { key: "Backspace", code: "Backspace", metaKey: true };
 
-/** Two hosts; srv_b's workspace holds the given idle chats. The switcher is open on srv_b's workspace. */
-async function openWithChats(chatIds: string[]) {
+/** Two hosts; srv_b's workspace holds the given idle chats and terminals. The switcher is open on srv_b's workspace. */
+async function openWithChats(chatIds: string[], terminalIds: string[] = [], options: { failKill?: boolean } = {}) {
   const registry = JSON.stringify([{ serverId: "srv_a" }, { serverId: "srv_b" }]);
   const page = fakePage("/h/srv_a/workspace/wks_a0", { "@paseo:daemon-registry": registry });
   const calls: string[] = [];
   const apis: Record<string, any> = {
-    srv_a: fakeApi("srv_a", ["wks_a0"], calls),
-    srv_b: fakeApi("srv_b", ["wks_b1", "wks_b2"], calls, undefined, { wks_b1: chatIds }),
+    srv_a: fakeApi("srv_a", ["wks_a0"], calls, undefined, {}, { wks_b1: ["wrong_host"] }),
+    srv_b: fakeApi("srv_b", ["wks_b1", "wks_b2"], calls, undefined, { wks_b1: chatIds }, { wks_b1: terminalIds, wks_b2: ["other_ws"] }, options.failKill),
   };
   const switcher = installSwitcher(fakeApi("own", [], calls), { getPaseoClient: (serverId: string) => apis[serverId] });
   await tick(20);
   page.press({ key: "`", code: "Backquote", metaKey: true });
   await tick(150);
-  const archived = () => calls.filter((c) => c.includes("archive"));
+  const archived = () => calls.filter((c) => c.includes("archive") || c.includes("kill"));
   return { page, calls, archived, switcher };
 }
+
+const RIGHT = { key: "ArrowRight", code: "ArrowRight", metaKey: true };
+const DOWN = { key: "ArrowDown", code: "ArrowDown", metaKey: true };
+
+/** The second, confirming ⌫: the arming one let go, and past the 250 ms guard. */
+async function confirmBackspace(page: ReturnType<typeof fakePage>) {
+  await tick(300);
+  page.release({ key: "Backspace" });
+  page.press(BS);
+  await tick(20);
+}
+
+test("→ lists the workspace's chats and terminals from its own host, chats first, counted as sessions", async () => {
+  const { page, calls, switcher } = await openWithChats(["c1"], ["t1", "t2"]);
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    assert.ok(calls.includes("srv_b:terminals:wks_b1"), calls.join());
+    assert.ok(!calls.some((c) => c.startsWith("srv_a:terminals") || c.startsWith("own:terminals")), "only the workspace's own host is asked");
+    const texts = page.texts();
+    assert.ok(texts.includes("chat c1"));
+    assert.ok(texts.includes("shell t1") && texts.includes("shell t2"));
+    assert.ok(!texts.includes("shell wrong_host") && !texts.includes("shell other_ws"));
+    assert.ok(texts.includes("3 sessions"), texts.filter((t) => /session/.test(t)).join("|"));
+    assert.ok(texts.lastIndexOf("chat c1") < texts.lastIndexOf("shell t1"), "chats before terminals");
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("typing in the session list matches terminal names as well as chat titles", async () => {
+  const { page, switcher } = await openWithChats(["c1"], ["t1"]);
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    for (const key of "shell") page.press({ key, code: `Key${key.toUpperCase()}`, metaKey: true });
+    await tick(20);
+    assert.ok(page.texts().includes("1 match"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("releasing the modifier on a terminal opens it through the workspace's ?open=terminal: route", async () => {
+  const { page, switcher } = await openWithChats(["c1"], ["t1"]);
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    page.press(DOWN);
+    page.release(RELEASE);
+    await tick(30);
+    assert.deepEqual(page.pushed, [`/h/srv_b/workspace/wks_b1?open=${encodeURIComponent("terminal:t1")}`]);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("⌫ on a terminal arms it with a close hint, and the second ⌫ kills it through its own host", async () => {
+  const { page, archived, switcher } = await openWithChats([], ["t1", "t2"]);
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    page.press(BS);
+    await tick(20);
+    assert.deepEqual(archived(), [], "the first ⌫ only arms");
+    assert.ok(page.texts().includes("again to close"));
+    await confirmBackspace(page);
+    assert.deepEqual(archived(), ["srv_b:kill-terminal:t1"]);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("a terminal that fails to close comes back and the hint line says why", async () => {
+  const { page, archived, switcher } = await openWithChats([], ["t1"], { failKill: true });
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    page.press(BS);
+    await confirmBackspace(page);
+    await tick(20);
+    assert.deepEqual(archived(), ["srv_b:kill-terminal:t1"]);
+    assert.ok(page.texts().includes("Couldn't close: terminal is gone"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
+test("an idle chat now needs a second ⌫ too, with the archive hint", async () => {
+  const { page, archived, switcher } = await openWithChats(["c1", "c2"]);
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    page.press(BS);
+    await tick(20);
+    assert.deepEqual(archived(), []);
+    assert.ok(page.texts().includes("again to archive"));
+    await confirmBackspace(page);
+    assert.equal(archived().length, 1);
+    assert.ok(archived()[0].startsWith("srv_b:archive-chat:"));
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
 
 test("a held ⌫ never archives rows: it clears the filter, stops at empty, and archives nothing", async () => {
   const { page, archived, switcher } = await openWithChats([]);
@@ -523,11 +660,18 @@ test("a held ⌫ never archives rows: it clears the filter, stops at empty, and 
   }
 });
 
-test("a held ⌫ in the chat list archives only the first chat, and does not go on to the workspaces", async () => {
+test("a held ⌫ in the session list archives nothing, and after a confirmed archive a held ⌫ archives nothing more", async () => {
   const { page, archived, switcher } = await openWithChats(["c1", "c2", "c3"]);
   try {
-    page.press({ key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    page.press(RIGHT);
     await tick(30);
+    page.press(BS);
+    for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
+    await tick(300);
+    for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
+    await tick(20);
+    assert.deepEqual(archived(), [], "held without a release: only armed");
+    page.release({ key: "Backspace" });
     page.press(BS);
     for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
     await tick(300);
@@ -541,11 +685,14 @@ test("a held ⌫ in the chat list archives only the first chat, and does not go 
   }
 });
 
-test("emptying the chat list by ⌫ returns to the workspaces, and a held ⌫ then archives no workspace", async () => {
+test("emptying the session list by ⌫ returns to the workspaces, and a held ⌫ then archives no workspace", async () => {
   const { page, archived, switcher } = await openWithChats(["c1"]);
   try {
-    page.press({ key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    page.press(RIGHT);
     await tick(30);
+    page.press(BS);
+    await tick(300);
+    page.release({ key: "Backspace" });
     page.press(BS);
     for (let i = 0; i < 10; i++) page.press({ ...BS, repeat: true });
     await tick(300);
@@ -611,10 +758,10 @@ test("after archiving a workspace in hold mode, releasing the modifier opens not
 test("after archiving a chat in hold mode, releasing the modifier opens nothing", async () => {
   const { page, archived, switcher } = await openWithChats(["c1", "c2"]);
   try {
-    page.press({ key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    page.press(RIGHT);
     await tick(30);
     page.press(BS);
-    await tick(20);
+    await confirmBackspace(page);
     assert.equal(archived().length, 1);
     page.release(RELEASE);
     await tick(30);

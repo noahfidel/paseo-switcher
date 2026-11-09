@@ -6,15 +6,21 @@ import {
   ARCHIVE_ERROR_MS,
   ARM_MS,
   archiveError,
+  armedHint,
   canDrillInto,
-  chatArchiveNeedsConfirm,
   clickArchiveAction,
-  chatCountLabel,
-  chatListState,
   chatFacts,
-  chatTitle,
-  chatsForWorkspace,
-  filterChats,
+  filterSessions,
+  providerLabel,
+  sessionCountLabel,
+  sessionKey,
+  sessionListState,
+  sessionOpenTarget,
+  sessionTitle,
+  sessionVerb,
+  sessionsForWorkspace,
+  type Session,
+  type TerminalInfo,
   keyAction,
   ago,
   rowFacts,
@@ -123,8 +129,13 @@ import {
  * - pane:  the workspace deck entry; snapshotted for thumbnails
  * - tab:   an agent tab in the pane's tab row (`workspace-tab-agent_<agentId>`), `aria-selected`
  *          when it is its pane's active tab; read to remember the last focused agent
- * - open:  `?open=agent:<agentId>` on the workspace route makes Paseo reveal that agent's tab
- *          (Paseo marks this input COMPAT(workspace-open-url), kept for bookmarks and deep links)
+ * - open:  `?open=agent:<agentId>` on the workspace route makes Paseo reveal that agent's tab, and
+ *          `?open=terminal:<terminalId>` that terminal's (Paseo marks this input COMPAT(workspace-open-url), kept for
+ *          bookmarks and deep links). In 0.15 `parseWorkspaceOpenIntent` accepts agent, terminal, draft, file and
+ *          setup targets, and the workspace route hands any of them to `prepareWorkspaceTab` with intent "reveal".
+ *          Not public: re-check the accepted prefixes on every Paseo upgrade.
+ * - terminals: a workspace's terminals come from the public SDK (`terminals.list({ workspaceId })` on the workspace's
+ *          own host), in the host's order; they carry no timestamps. ⌫ closes one with `terminals.ref(id).kill()`.
  * - screen: plugin screens are `/h/<serverId>/plugin/<pluginId>/surface/<screenId>?param.<key>=<value>`, reopened
  *          with the same pushState + popstate as a hidden workspace (a plugin can only open its own screens through
  *          the API). The title is the text of `[data-testid="plugin-surface-title"]` in the screen header.
@@ -167,9 +178,10 @@ const ROW_PREFIX = "sidebar-workspace-row-";
 const rowSelector = (key: string) => `[data-testid="${ROW_PREFIX}${key}"]`;
 const paneSelector = (key: string) => `[data-testid="workspace-deck-entry-${key}"]`;
 const SELECTED_AGENT_TABS = '[data-testid^="workspace-tab-agent_"][aria-selected="true"]';
-function workspaceRoute(serverId: string, workspaceId: string, agentId: string | null): string {
+/** The workspace route, with `open` (`agent:<id>` or `terminal:<id>`, see the adapter notes) naming the tab to reveal. */
+function workspaceRoute(serverId: string, workspaceId: string, open: string | null): string {
   const path = `/h/${encodeURIComponent(serverId)}/workspace/${encodeURIComponent(workspaceId)}`;
-  return agentId ? `${path}?open=${encodeURIComponent(`agent:${agentId}`)}` : path;
+  return open ? `${path}?open=${encodeURIComponent(open)}` : path;
 }
 
 /** Visit time per workspace key. Replaces the visit order in MRU_KEY, which is read once to migrate. */
@@ -479,26 +491,28 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** Typed while the switcher is open; filters every workspace, not only recent ones. */
   let query = "";
   /**
-   * One workspace's chats, shown in place of the workspaces (→ on a row, ↓ on thumbnails). The
-   * workspace list keeps its own selection and filter underneath, so ← returns to it as it was.
+   * One workspace's sessions (chats and terminals), shown in place of the workspaces (→ on a row, ↓ on
+   * thumbnails). The workspace list keeps its own selection and filter underneath, so ← returns to it as it was.
    */
   let drill: {
     key: string;
     name: string;
-    /** The chats on show (filtered when there is a query). */
-    chats: AgentInfo[];
-    /** All the workspace's chats, before the filter. */
+    /** The sessions on show (filtered when there is a query). */
+    sessions: Session[];
+    /** All the workspace's sessions, before the filter. */
     total: number;
-    /** The agent list for this host has loaded. */
+    /** The agent list for this host and the workspace's terminal list have both loaded or failed. */
     loaded: boolean;
     /** The last load of the agent list failed. */
     failed: boolean;
+    /** The last load of the terminal list failed. */
+    terminalsFailed: boolean;
     index: number;
     query: string;
   } | null = null;
   /** Every match for the query; only the first MAX_LIMIT are listed. */
   let matches = 0;
-  /** The row a first ⌫ armed for archiving (a workspace's key, or `chat:<id>`), until another key or a timeout. */
+  /** The row a first ⌫ armed (a workspace's key, `chat:<id>` or `terminal:<id>`), until another key or a timeout. */
   let armed: string | null = null;
   let armTimer: any = null;
   let armedAt = 0;
@@ -509,7 +523,7 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** A short message in the hint line (a failed archive), until it times out. */
   let notice: string | null = null;
   let noticeTimer: any = null;
-  /** Workspaces and chats being archived: dropped from every list that lands meanwhile. */
+  /** Workspaces and sessions being archived or closed: dropped from every list that lands meanwhile. */
   const archiving = new Set<string>();
   const coarse = Boolean(win.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
 
@@ -839,6 +853,9 @@ function createSwitcher(installs: Installation[]): Switcher {
   /** Loads in flight, by host. */
   const loadingWorkspaces = new Map<string, Promise<boolean>>();
   const loadingAgents = new Map<string, Promise<boolean>>();
+  /** Terminals per workspace key, from the last load; loaded only when a workspace's sessions are listed. */
+  const terminalLists = new Map<string, TerminalInfo[]>();
+  const loadingTerminals = new Map<string, Promise<boolean>>();
   /** Bumped when the background setting changes or the switcher goes, so a load that started before is discarded. */
   let generation = 0;
   let disposed = false;
@@ -974,6 +991,7 @@ function createSwitcher(installs: Installation[]): Switcher {
             automated: isAutomatedChat(agent.labels ?? {}),
             botId: agent.labels?.[BOT_LABEL] || null,
             title: agent.title ?? null,
+            provider: agent.provider ?? null,
             status,
             // How long it has been running, or waiting since it asked or finished.
             statusAt: (status === "running" ? latest(agent.activeTurn?.startedAt) : status === "done" ? 0 : latest(agent.attentionTimestamp)) || undefined,
@@ -987,7 +1005,7 @@ function createSwitcher(installs: Installation[]): Switcher {
         countMessageVisits();
         const drilled = drill && splitKey(drill.key).serverId === host;
         if (drilled && drill) drill.failed = false;
-        if (root && drilled) refreshChats();
+        if (root && drilled) refreshSessions();
         if (root && visits !== before) refreshCardsAndRender();
         else if (root && drilled) render();
         return true;
@@ -1005,11 +1023,51 @@ function createSwitcher(installs: Installation[]): Switcher {
     return promise;
   }
 
-  /** An open chat list of this host stops waiting and says it could not load. */
+  /** An open session list of this host stops waiting and says it could not load. */
   function chatsFailed(host: string) {
     if (!drill || splitKey(drill.key).serverId !== host) return;
     drill.failed = true;
     if (root) render();
+  }
+
+  /** Loads one workspace's terminals from its own host. An open session list follows the answer. */
+  function loadTerminals(key: string): Promise<boolean> {
+    const running = loadingTerminals.get(key);
+    if (running) return running;
+    const { serverId: host, workspaceId } = splitKey(key);
+    const api = apiFor(host);
+    const settle = (ok: boolean) => {
+      if (drill && drill.key === key) {
+        drill.terminalsFailed = !ok;
+        refreshSessions();
+        if (root) render();
+      }
+      return ok;
+    };
+    if (!api) return Promise.resolve(settle(false));
+    // A host without the terminal API has no terminals to list.
+    if (!api.terminals) {
+      terminalLists.set(key, []);
+      return Promise.resolve(settle(true));
+    }
+    const mine = generation;
+    const promise: Promise<boolean> = withTimeout(api.terminals.list({ workspaceId }))
+      .then((result) => {
+        if (mine !== generation) return false;
+        const list: TerminalInfo[] = [];
+        for (const t of result.entries) {
+          if (archiving.has(`terminal:${t.id}`)) continue;
+          list.push({ id: t.id, workspaceId: t.workspaceId || workspaceId, name: t.name ?? "" });
+        }
+        terminalLists.set(key, list);
+        return settle(true);
+      })
+      .catch(() => settle(false))
+      .finally(() => {
+        if (loadingTerminals.get(key) === promise) loadingTerminals.delete(key);
+      });
+    loadingTerminals.set(key, promise);
+    return promise;
   }
 
   // ---- thumbnails -------------------------------------------------------------------------------
@@ -1375,8 +1433,8 @@ function createSwitcher(installs: Installation[]): Switcher {
   function move(delta: number) {
     setArmed(null);
     if (drill) {
-      if (!drill.chats.length) return;
-      drill.index = wrap(drill.index + delta, drill.chats.length);
+      if (!drill.sessions.length) return;
+      drill.index = wrap(drill.index + delta, drill.sessions.length);
     } else {
       if (!cards.length) return;
       index = wrap(index + delta, cards.length);
@@ -1400,11 +1458,11 @@ function createSwitcher(installs: Installation[]): Switcher {
     return `chat:${agentId}`;
   }
 
-  /** What an armed ⌫ would archive: the selected workspace row, or the selected chat. */
+  /** What an armed ⌫ would archive or close: the selected workspace row, or the selected session. */
   function selectedRowKey(): string | null {
     if (drill) {
-      const chat = drill.chats[drill.index];
-      return chat ? chatArmKey(chat.id) : null;
+      const session = drill.sessions[drill.index];
+      return session ? sessionKey(session) : null;
     }
     return cards[index]?.key ?? null;
   }
@@ -1495,7 +1553,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     archiving.add(rowKey);
     const data = dataOf(serverId);
     if (data.agents) data.agents = { ...data.agents, list: data.agents.list.filter((a) => a.id !== chat.id) };
-    refreshChats();
+    refreshSessions();
     if (drill.total === 0) drillOut();
     else if (root) render();
     try {
@@ -1503,7 +1561,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     } catch (error) {
       archiving.delete(rowKey);
       if (data.agents && !data.agents.list.some((a) => a.id === chat.id)) data.agents = { ...data.agents, list: [...data.agents.list, chat] };
-      if (drill) refreshChats();
+      if (drill) refreshSessions();
       if (root) render();
       return showNotice(archiveError(error));
     }
@@ -1511,14 +1569,52 @@ function createSwitcher(installs: Installation[]): Switcher {
     setTimeout(() => archiving.delete(rowKey), 5000);
   }
 
-  /** The hover ×, or ⌫, on a chat: a working chat is armed first and archived on the second press. */
-  function archiveChatAt(at: number) {
-    const chat = drill?.chats[at];
-    if (!drill || !chat) return;
+  /** Closes a terminal through its host's API; the row goes at once, and an emptied list returns to the workspaces. */
+  async function closeTerminal(terminal: TerminalInfo) {
+    if (!drill) return;
+    const key = drill.key;
+    const rowKey = `terminal:${terminal.id}`;
+    if (archiving.has(rowKey)) return;
+    const api = apiFor(splitKey(key).serverId);
+    if (!api?.terminals) return showNotice(archiveError("that host is not reachable", "close"));
+    holdEnds();
+    archivedAt = Date.now();
+    archiving.add(rowKey);
+    const before = terminalLists.get(key) ?? [];
+    terminalLists.set(key, before.filter((t) => t.id !== terminal.id));
+    refreshSessions();
+    if (drill.total === 0) drillOut();
+    else if (root) render();
+    try {
+      await api.terminals.ref(terminal.id).kill();
+    } catch (error) {
+      archiving.delete(rowKey);
+      const now = terminalLists.get(key) ?? [];
+      if (!now.some((t) => t.id === terminal.id)) terminalLists.set(key, before.filter((t) => t.id === terminal.id || now.some((n) => n.id === t.id)));
+      if (drill) refreshSessions();
+      if (root) render();
+      return showNotice(archiveError(error, "close"));
+    }
+    void Promise.allSettled([loadingTerminals.get(key)]).then(() => {
+      if (!disposed) void loadTerminals(key);
+    });
+    setTimeout(() => archiving.delete(rowKey), 5000);
+  }
+
+  /** Archives a chat or closes a terminal. */
+  function removeSession(session: Session) {
+    if (session.kind === "chat") void archiveChat(session.agent);
+    else void closeTerminal(session.terminal);
+  }
+
+  /** The hover × on a session: the first click arms it, as ⌫ does, and the second archives or closes it. */
+  function archiveSessionAt(at: number) {
+    const session = drill?.sessions[at];
+    if (!drill || !session) return;
     drill.index = at;
-    const rowKey = chatArmKey(chat.id);
+    const rowKey = sessionKey(session);
     const isArmed = armed === rowKey;
-    const todo = clickArchiveAction({ busy: chatArchiveNeedsConfirm(chat), armed: isArmed, armedForMs: isArmed ? Date.now() - armedAt : Infinity, sinceArchiveMs: Date.now() - archivedAt });
+    const todo = clickArchiveAction({ armed: isArmed, armedForMs: isArmed ? Date.now() - armedAt : Infinity, sinceArchiveMs: Date.now() - archivedAt });
     if (todo === "ignore") return;
     if (todo === "arm") {
       setArmed(rowKey);
@@ -1527,21 +1623,23 @@ function createSwitcher(installs: Installation[]): Switcher {
       return;
     }
     setArmed(null);
-    void archiveChat(chat);
+    removeSession(session);
   }
 
-  // ---- one workspace's chats -----------------------------------------------------------------------
+  // ---- one workspace's sessions --------------------------------------------------------------------
 
-  /** Replaces the list with the selected workspace's chats. Plugin screens have none. */
+  /** Replaces the list with the selected workspace's sessions (chats and terminals). Plugin screens have none. */
   function drillIn() {
     setArmed(null);
     const card = cards[index];
     if (!card || !canDrillInto(card)) return;
-    drill = { key: card.key, name: cardName(card), chats: [], total: 0, loaded: false, failed: false, index: 0, query: "" };
-    refreshChats();
+    drill = { key: card.key, name: cardName(card), sessions: [], total: 0, loaded: false, failed: false, terminalsFailed: false, index: 0, query: "" };
+    refreshSessions();
     clearTimeout(showTimer);
     render();
-    if (!drill.loaded || agentsStale(card.serverId, WORKSPACES_STALE_MS)) void loadHostAgents(card.serverId);
+    if (!agentsOf(card.serverId) || agentsStale(card.serverId, WORKSPACES_STALE_MS)) void loadHostAgents(card.serverId);
+    // Terminals are cheap to list and have no change feed here, so they are asked for on every drill-in.
+    void loadTerminals(card.key);
   }
 
   /** Back to the workspaces, with the selection on the workspace you came from. */
@@ -1551,18 +1649,20 @@ function createSwitcher(installs: Installation[]): Switcher {
     render();
   }
 
-  /** Rebuilds the chat list from the agent list, keeping the selected chat when it is still there. */
-  function refreshChats() {
+  /** Rebuilds the session list from the agent and terminal lists, keeping the selected session when it is still there. */
+  function refreshSessions() {
     if (!drill) return;
-    const selected = drill.chats[drill.index]?.id;
+    const selected = drill.sessions[drill.index];
+    const selectedKey = selected ? sessionKey(selected) : null;
     const { serverId: server, workspaceId } = splitKey(drill.key);
     const list = agentsOf(server)?.list ?? null;
-    const all = chatsForWorkspace(list, workspaceId, agentMemory[drill.key]?.agentId);
-    drill.loaded = list !== null;
+    const terminals = terminalLists.get(drill.key) ?? null;
+    const all = sessionsForWorkspace(list, terminals, workspaceId, agentMemory[drill.key]?.agentId);
+    drill.loaded = list !== null && (terminals !== null || drill.terminalsFailed);
     drill.total = all.length;
-    drill.chats = filterChats(all, drill.query);
-    const kept = drill.chats.findIndex((c) => c.id === selected);
-    drill.index = kept >= 0 ? kept : clampIndex(drill.index, drill.chats.length);
+    drill.sessions = filterSessions(all, drill.query);
+    const kept = drill.sessions.findIndex((s) => sessionKey(s) === selectedKey);
+    drill.index = kept >= 0 ? kept : clampIndex(drill.index, drill.sessions.length);
   }
 
   function setChatQuery(next: string) {
@@ -1570,27 +1670,32 @@ function createSwitcher(installs: Installation[]): Switcher {
     setArmed(null);
     drill.query = next;
     mode = "sticky";
-    refreshChats();
+    refreshSessions();
     drill.index = 0;
     render();
   }
 
-  /** Opens a chat in its workspace and remembers it as that workspace's last focused chat. */
-  function commitChat(at: number) {
+  /**
+   * Opens a session in its workspace through the `?open=` route. A chat is remembered as that workspace's
+   * last focused chat; a terminal is not (switching back reopens a chat, as before).
+   */
+  function commitSession(at: number) {
     if (!drill) return;
-    const chat = drill.chats[at];
-    if (!chat) {
-      // Nothing typed and no chats: open the workspace itself. A filter with no match opens nothing.
+    const session = drill.sessions[at];
+    if (!session) {
+      // Nothing typed and no sessions: open the workspace itself. A filter with no match opens nothing.
       if (!drill.query) commit();
       return;
     }
     const key = drill.key;
-    agentMemory = rememberAgent(agentMemory, key, chat.id, Date.now());
-    writeJson(AGENTS_KEY, agentMemory);
+    if (session.kind === "chat") {
+      agentMemory = rememberAgent(agentMemory, key, session.id, Date.now());
+      writeJson(AGENTS_KEY, agentMemory);
+    }
     close();
     const { serverId: server, workspaceId } = splitKey(key);
-    // As in commit(): let the closed switcher paint before Paseo renders the chat.
-    win.requestAnimationFrame(() => setTimeout(() => goTo(workspaceRoute(server, workspaceId, chat.id)), 0));
+    // As in commit(): let the closed switcher paint before Paseo renders the session.
+    win.requestAnimationFrame(() => setTimeout(() => goTo(workspaceRoute(server, workspaceId, sessionOpenTarget(session))), 0));
   }
 
   function close() {
@@ -1643,7 +1748,8 @@ function createSwitcher(installs: Installation[]): Switcher {
     // one last focused there, else its most recently active one. Rows keep the click, which runs
     // Paseo's own choice (an agent needing attention, else the workspace's saved layout).
     const { serverId: server, workspaceId } = splitKey(key);
-    const path = workspaceRoute(server, workspaceId, agentFor(key));
+    const agentId = agentFor(key);
+    const path = workspaceRoute(server, workspaceId, agentId ? `agent:${agentId}` : null);
     goTo(path);
   }
 
@@ -1669,7 +1775,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     }
     const surface = surfaceOf(currentPane() ?? doc.body);
     dark = isDark(surface);
-    // A workspace's chats are always a list, whatever the layout.
+    // A workspace's sessions are always a list, whatever the layout.
     const list = Boolean(drill) || listShown();
     root.classList.toggle("pws-dark", dark);
     watchAvatars();
@@ -1678,8 +1784,8 @@ function createSwitcher(installs: Installation[]): Switcher {
     root.classList.toggle("pws-entered", !fresh);
     root.style.setProperty("--pws-surface", surface);
     if (drill) {
-      // Chat rows plus the header and panel padding, against the panel's max height.
-      overflowing = drill.chats.length * CHAT_ROW_H + 12 + 44 > win.innerHeight - Math.max(48, win.innerHeight * 0.16) - 150;
+      // Session rows plus the header and panel padding, against the panel's max height.
+      overflowing = drill.sessions.length * CHAT_ROW_H + 12 + 44 > win.innerHeight - Math.max(48, win.innerHeight * 0.16) - 150;
     } else if (list) {
       // Rows plus panel padding, against the panel's max height (see .pws-list .pws-panel).
       overflowing = cards.length * ROW_H + 12 > win.innerHeight - Math.max(48, win.innerHeight * 0.16) - 150;
@@ -1698,12 +1804,13 @@ function createSwitcher(installs: Installation[]): Switcher {
     panel.setAttribute("role", "listbox");
     const at = Date.now();
     if (drill) {
-      panel.setAttribute("aria-label", `Chats in ${drill.name}`);
-      if (drill.chats.length) drill.chats.forEach((chat, i) => panel.appendChild(renderChat(chat, i, at)));
-      else panel.appendChild(chatEmptyState());
+      panel.setAttribute("aria-label", `Sessions in ${drill.name}`);
+      if (drill.sessions.length) drill.sessions.forEach((session, i) => panel.appendChild(renderSession(session, i, at)));
+      else panel.appendChild(sessionEmptyState());
       const sheet = el("div", "pws-sheet");
       sheet.appendChild(drillHeader());
-      if (drill.query) sheet.appendChild(queryBar(drill.query, drill.chats.length === 1 ? "1 match" : drill.chats.length ? `${drill.chats.length} matches` : ""));
+      const shown = drill.sessions.length;
+      if (drill.query) sheet.appendChild(queryBar(drill.query, shown === 1 ? "1 match" : shown ? `${shown} matches` : ""));
       sheet.appendChild(panel);
       root.replaceChildren(sheet, hintBar());
       if (fresh) host.appendChild(root);
@@ -1829,7 +1936,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     return bar;
   }
 
-  /** Which workspace's chats these are; clicking it, like ←, goes back to the workspaces. */
+  /** Which workspace's sessions these are; clicking it, like ←, goes back to the workspaces. */
   function drillHeader(): Node {
     const header = el("div", "pws-drill");
     header.setAttribute("role", "button");
@@ -1842,38 +1949,43 @@ function createSwitcher(installs: Installation[]): Switcher {
     header.appendChild(el("span", "pws-drill-name", drill?.name ?? ""));
     const total = drill?.total ?? 0;
     const capped = drill ? Boolean(agentsOf(splitKey(drill.key).serverId)?.capped) : false;
-    header.appendChild(el("span", "pws-drill-count", chatCountLabel(total, { loaded: Boolean(drill?.loaded), capped })));
+    header.appendChild(el("span", "pws-drill-count", sessionCountLabel(total, { loaded: Boolean(drill?.loaded), capped })));
     return header;
   }
 
-  function chatEmptyState(): Node {
+  function sessionEmptyState(): Node {
     const box = el("div", "pws-empty");
-    const state = drill ? chatListState({ loaded: drill.loaded, failed: drill.failed, query: drill.query, shown: drill.chats.length }) : "loading";
+    const failed = Boolean(drill && (drill.failed || (drill.terminalsFailed && !terminalLists.has(drill.key))));
+    const state = drill ? sessionListState({ loaded: drill.loaded, failed, query: drill.query, shown: drill.sessions.length }) : "loading";
     if (state === "no-match") {
-      box.appendChild(el("div", "pws-empty-title", `No chat matches “${drill?.query}”`));
-      box.appendChild(el("div", "pws-empty-text", "Chat titles are searched."));
+      box.appendChild(el("div", "pws-empty-title", `No session matches “${drill?.query}”`));
+      box.appendChild(el("div", "pws-empty-text", "Chat titles and terminal names are searched."));
     } else if (state === "failed") {
-      box.appendChild(el("div", "pws-empty-title", "Couldn’t load this workspace’s chats"));
+      box.appendChild(el("div", "pws-empty-title", "Couldn’t load this workspace’s sessions"));
       box.appendChild(el("div", "pws-empty-text", "Enter opens the workspace."));
     } else if (state === "loading") {
       const title = el("div", "pws-empty-title pws-loading");
       title.appendChild(el("span", "pws-spin"));
-      title.appendChild(el("span", "", "Loading chats"));
+      title.appendChild(el("span", "", "Loading sessions"));
       box.appendChild(title);
     } else {
-      box.appendChild(el("div", "pws-empty-title", "No chats in this workspace"));
+      box.appendChild(el("div", "pws-empty-title", "No sessions in this workspace"));
       box.appendChild(el("div", "pws-empty-text", "Enter opens the workspace."));
     }
     return box;
   }
 
-  /** A chat row: its title, and its status in the words a workspace row uses. */
-  function renderChat(chat: AgentInfo, i: number, at: number): Node {
-    const title = chatTitle(chat);
-    const node = el("div", `pws-card pws-row pws-chat${armed === chatArmKey(chat.id) ? " pws-armed" : ""}`);
+  /**
+   * A session row: its kind's icon and name; a chat adds its provider and its status in the words a
+   * workspace row uses. Terminals have no status the switcher can read.
+   */
+  function renderSession(session: Session, i: number, at: number): Node {
+    const title = sessionTitle(session);
+    const chat = session.kind === "chat";
+    const node = el("div", `pws-card pws-row ${chat ? "pws-chat" : "pws-terminal"}${armed === sessionKey(session) ? " pws-armed" : ""}`);
     node.setAttribute("role", "option");
     node.setAttribute("aria-label", title);
-    node.setAttribute("data-agent", chat.id);
+    node.setAttribute(chat ? "data-agent" : "data-terminal", session.id);
     node.addEventListener("mousemove", () => {
       if (drill && drill.index !== i) {
         setArmed(null);
@@ -1881,28 +1993,32 @@ function createSwitcher(installs: Installation[]): Switcher {
         select();
       }
     });
-    node.addEventListener("click", () => commitChat(i));
+    node.addEventListener("click", () => commitSession(i));
+    const label = sessionVerb(session) === "close" ? "Close terminal" : "Archive chat";
     const archive = el("button", "pws-hide") as any;
     archive.setAttribute("type", "button");
-    archive.setAttribute("aria-label", "Archive chat");
-    archive.title = "Archive chat";
+    archive.setAttribute("aria-label", label);
+    archive.title = label;
     archive.appendChild(icon("x", "pws-icon"));
     archive.addEventListener("click", (e: any) => {
       e.stopPropagation();
-      archiveChatAt(i);
+      archiveSessionAt(i);
     });
     archive.addEventListener("mousedown", (e: any) => e.stopPropagation());
     node.appendChild(archive);
 
     const lead = el("div", "pws-lead");
-    lead.appendChild(icon("chat", "pws-icon pws-badge-icon"));
+    lead.appendChild(icon(chat ? "chat" : "terminal", "pws-icon pws-badge-icon"));
     node.appendChild(lead);
 
     const line = el("div", "pws-l1");
     line.appendChild(nameNode("pws-name", title, drill?.query ?? ""));
+    const provider = chat ? providerLabel(session.agent.provider) : null;
+    if (provider) line.appendChild(el("span", "pws-provider", provider));
     node.appendChild(line);
+    if (!chat) return node;
 
-    const facts = chatFacts(chat, at);
+    const facts = chatFacts(session.agent, at);
     if (facts.label) {
       const status = el("div", `pws-status pws-status-${facts.state}`);
       if (facts.state !== "done") status.appendChild(statusMark(facts.state));
@@ -1945,12 +2061,12 @@ function createSwitcher(installs: Installation[]): Switcher {
     }
     if (armed) {
       bar.classList.add("pws-hint-danger");
-      if (touchScreen()) bar.textContent = "Tap × again to archive";
-      else keys(["⌫"], "again to archive");
+      if (touchScreen()) bar.textContent = armedHint(armed, true);
+      else keys(["⌫"], armedHint(armed, false));
       return bar;
     }
     if (touchScreen()) {
-      bar.textContent = drill ? "Tap a chat to open it" : "Tap a workspace to switch";
+      bar.textContent = drill ? "Tap a session to open it" : "Tap a workspace to switch";
       return bar;
     }
     // ⌫ hides a plugin screen, which cannot be archived; the hint is drawn per render, so it speaks for workspaces.
@@ -1961,7 +2077,11 @@ function createSwitcher(installs: Installation[]): Switcher {
       } else keys(["⌫"], "hide");
     };
     if (drill) {
-      if (drill.query && !drill.chats.length) {
+      const selected = drill.sessions[drill.index];
+      const removeKey = () => {
+        if (selected) keys(["⌫"], sessionVerb(selected));
+      };
+      if (drill.query && !drill.sessions.length) {
         keys(["Backspace"], "edit");
         keys(["Esc"], "clear");
       } else if (drill.query) {
@@ -1972,22 +2092,22 @@ function createSwitcher(installs: Installation[]): Switcher {
         keys([SHORTCUTS[shortcut].modifierLabel], "release to open");
         keys(["Shift", SHORTCUTS[shortcut].keyLabel], "back");
         keys(["←"], "workspaces");
-        if (drill.chats.length) keys(["⌫"], "archive");
+        removeKey();
         keys(["Esc"], "cancel");
         bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
       } else {
         keys(["Enter"], "open");
         keys(["↑", "↓"], "move");
         keys(["←"], "workspaces");
-        if (drill.chats.length) keys(["⌫"], "archive");
+        removeKey();
         keys(["Esc"], "close");
         bar.appendChild(el("span", "pws-hint-item pws-hint-type", "Type to filter"));
       }
       return bar;
     }
     const arrows = listShown() ? ["↑", "↓"] : ["←", "→"];
-    // Only workspaces whose host answered have chats to list; with none on show, "chats" is left out.
-    const chats = cards.some((c) => canDrillInto(c)) ? () => keys([listShown() ? "→" : "↓"], "chats") : () => {};
+    // Only workspaces whose host answered have sessions to list; with none on show, "sessions" is left out.
+    const chats = cards.some((c) => canDrillInto(c)) ? () => keys([listShown() ? "→" : "↓"], "sessions") : () => {};
     if (query && !cards.length) {
       keys(["Backspace"], "edit");
       keys(["Esc"], "clear");
@@ -2365,7 +2485,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (key === "Control" || key === "Shift" || key === "Alt" || key === "Meta") return;
     stop(e);
     const card = cards[index];
-    const chat = drill?.chats[drill.index];
+    const session = drill?.sessions[drill.index];
     const filter = drill ? drill.query : query;
     const edit = drill ? setChatQuery : setQuery;
     const rowKey = selectedRowKey();
@@ -2376,10 +2496,9 @@ function createSwitcher(installs: Installation[]): Switcher {
         drilled: Boolean(drill),
         query: filter,
         canDrill: canDrillInto(card),
-        hasSelection: drill ? Boolean(chat) : Boolean(card),
+        hasSelection: drill ? Boolean(session) : Boolean(card),
         metaTypes: SHORTCUTS[shortcut].modifier === "Meta",
         screen: Boolean(card?.screen),
-        busy: Boolean(chat && chatArchiveNeedsConfirm(chat)),
         armed: armed !== null && armed === rowKey,
         armedForMs: armed !== null && armed === rowKey ? Date.now() - armedAt : Infinity,
         released: armedReleased,
@@ -2393,7 +2512,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       case "ignore":
         return;
       case "archive":
-        if (drill) return chat ? void archiveChat(chat) : undefined;
+        if (drill) return session ? removeSession(session) : undefined;
         return card ? void archiveWorkspace(card) : undefined;
       case "move":
         return move(action.delta);
@@ -2402,7 +2521,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       case "back":
         return drillOut();
       case "commit":
-        return drill ? commitChat(drill.index) : commit();
+        return drill ? commitSession(drill.index) : commit();
       case "cancel":
         return close();
       case "clear":
@@ -2421,7 +2540,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (open && armed && keys.realKey(e) === "Backspace") armedReleased = true;
     if (open && mode === "hold" && isReleaseKey(shortcut, keys.realKey(e))) {
       stop(e);
-      if (drill) commitChat(drill.index);
+      if (drill) commitSession(drill.index);
       else commit();
     }
   }
@@ -2668,6 +2787,7 @@ const ICONS = {
   gitBranch: '<path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>',
   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  terminal: '<path d="M12 19h8"/><path d="m4 17 6-6-6-6"/>',
   puzzle:
     '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
 };
@@ -2852,6 +2972,8 @@ const CSS = `
 .pws-status-failed { color: var(--pws-bad); }
 .pws-status-attention { color: var(--pws-ok); }
 .pws-list .pws-name { display: block; font-size: 14px; line-height: 20px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+/* A chat's provider ("Claude", "Codex") after its title, as quiet as the meta line. */
+.pws-provider { flex: 0 0 auto; color: var(--pws-muted); font-size: 12px; line-height: 20px; font-weight: 400; }
 .pws-tag {
   flex: 0 0 auto; padding: 0 5px; border: 1px solid var(--pws-border); border-radius: 5px;
   color: var(--pws-muted); font-size: 11px; line-height: 16px; font-weight: 500;

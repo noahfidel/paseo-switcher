@@ -833,7 +833,19 @@ export interface AgentInfo {
   status?: RowState;
   /** When the chat entered that status (the running turn's start, or the attention time). */
   statusAt?: number;
+  /** The agent's provider as Paseo names it (`claude`, `codex`, …); shown as a hint on its row. */
+  provider?: string | null;
 }
+
+/** A terminal in a workspace, as the host's terminal list returns it. */
+export interface TerminalInfo {
+  id: string;
+  workspaceId: string;
+  name: string;
+}
+
+/** One row of a workspace's session list: an agent chat or a terminal. */
+export type Session = { kind: "chat"; id: string; agent: AgentInfo } | { kind: "terminal"; id: string; terminal: TerminalInfo };
 
 // ---- chats in a workspace (the drill-in list) ------------------------------------------------------
 
@@ -884,8 +896,72 @@ export function canDrillInto(card: Card | undefined): boolean {
   return Boolean(card && !card.screen && card.info);
 }
 
-/** What the chat list shows: the chats, or why there are none. A failed load never leaves it loading. */
-export function chatListState(s: { loaded: boolean; failed: boolean; query: string; shown: number }): "list" | "loading" | "failed" | "empty" | "no-match" {
+/** What a terminal row says when its terminal has no name. */
+export const UNTITLED_TERMINAL = "Terminal";
+
+/**
+ * A workspace's sessions in the order the drill-in list shows them: its chats (see chatsForWorkspace),
+ * then its terminals in the order the host lists them. Terminals carry no timestamps, so they cannot be
+ * mixed in by recency. Either list may be missing (not loaded yet, or failed); the other still shows.
+ */
+export function sessionsForWorkspace(
+  agents: readonly AgentInfo[] | null | undefined,
+  terminals: readonly TerminalInfo[] | null | undefined,
+  workspaceId: string,
+  rememberedId: string | null | undefined,
+): Session[] {
+  const chats: Session[] = chatsForWorkspace(agents, workspaceId, rememberedId).map((agent) => ({ kind: "chat", id: agent.id, agent }));
+  const shells: Session[] = (terminals ?? []).filter((t) => t.workspaceId === workspaceId).map((terminal) => ({ kind: "terminal", id: terminal.id, terminal }));
+  return [...chats, ...shells];
+}
+
+export function sessionTitle(session: Session): string {
+  return session.kind === "chat" ? chatTitle(session.agent) : session.terminal.name.trim() || UNTITLED_TERMINAL;
+}
+
+/** A session's row key, for arming and for keeping a row out of lists while it is being removed. */
+export function sessionKey(session: Session): string {
+  return `${session.kind}:${session.id}`;
+}
+
+/** The `?open=` value that makes Paseo reveal the session's tab (its `parseWorkspaceOpenIntent`). */
+export function sessionOpenTarget(session: Session): string {
+  return session.kind === "chat" ? `agent:${session.id}` : `terminal:${session.id}`;
+}
+
+/** What ⌫ does to a session: a chat is archived (it can be reopened), a terminal is closed (its process ends). */
+export function sessionVerb(session: Session): "archive" | "close" {
+  return session.kind === "terminal" ? "close" : "archive";
+}
+
+/** The hint line while a row is armed, for its arm key (`terminal:<id>` closes; anything else archives). */
+export function armedHint(armedKey: string, touch: boolean): string {
+  const verb = armedKey.startsWith("terminal:") ? "close" : "archive";
+  return touch ? `Tap × again to ${verb}` : `again to ${verb}`;
+}
+
+/** Sessions whose name contains every word of the query, in the order given. */
+export function filterSessions(sessions: readonly Session[], query: string): Session[] {
+  const words = queryWords(query);
+  if (!words.length) return [...sessions];
+  return sessions.filter((session) => {
+    const title = sessionTitle(session).toLowerCase();
+    return words.every((w) => title.includes(w));
+  });
+}
+
+/** Provider names as Paseo writes them; any other is capitalized. */
+const PROVIDER_LABELS: Record<string, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode", gemini: "Gemini", copilot: "Copilot", amp: "Amp", cursor: "Cursor" };
+
+/** A chat row's provider hint ("Claude", "Codex"), from the agent's provider (`claude` or `claude/<model>`). */
+export function providerLabel(provider: string | null | undefined): string | null {
+  const id = (provider ?? "").split("/")[0].trim();
+  if (!id) return null;
+  return PROVIDER_LABELS[id.toLowerCase()] ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** What the session list shows: the sessions, or why there are none. A failed load never leaves it loading. */
+export function sessionListState(s: { loaded: boolean; failed: boolean; query: string; shown: number }): "list" | "loading" | "failed" | "empty" | "no-match" {
   if (s.shown) return "list";
   if (s.query && s.loaded) return "no-match";
   if (s.failed) return "failed";
@@ -893,12 +969,12 @@ export function chatListState(s: { loaded: boolean; failed: boolean; query: stri
 }
 
 /**
- * The chat list header's count. Paseo's agent list cannot be asked for one workspace, so the switcher
+ * The session list header's count. Paseo's agent list cannot be asked for one workspace, so the switcher
  * reads the host's most recently changed chats; when that list was cut off, older chats may be missing.
  */
-export function chatCountLabel(total: number, s: { loaded: boolean; capped: boolean }): string {
+export function sessionCountLabel(total: number, s: { loaded: boolean; capped: boolean }): string {
   if (!s.loaded) return "";
-  return `${total} ${s.capped ? "recent " : ""}${total === 1 ? "chat" : "chats"}`;
+  return `${total} ${s.capped ? "recent " : ""}${total === 1 ? "session" : "sessions"}`;
 }
 
 /** Chats whose title contains every word of the query, in the order given. */
@@ -916,7 +992,7 @@ export function filterChats(chats: readonly AgentInfo[], query: string): AgentIn
 export interface KeyState {
   /** The layout on show (a narrow window shows the list). */
   layout: Layout;
-  /** Showing one workspace's chats instead of the workspaces. */
+  /** Showing one workspace's sessions instead of the workspaces. */
   drilled: boolean;
   /** The filter of the level on show. */
   query: string;
@@ -928,8 +1004,6 @@ export interface KeyState {
   metaTypes: boolean;
   /** The selected workspace-level row is a plugin screen, which Paseo cannot archive. */
   screen: boolean;
-  /** The selected chat is running or waiting on input, so archiving it needs a second press. */
-  busy: boolean;
   /** The selected row was armed by a ⌫ press and has not been disarmed since. */
   armed: boolean;
   /** How long ago the armed row was armed, in ms (Infinity when none is). */
@@ -982,24 +1056,15 @@ export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; al
       // A held ⌫ must never walk down the list archiving rows: only a fresh press acts on a row.
       if (mods.repeat) return { type: "ignore" };
       if (!s.hasSelection) return s.drilled ? { type: "none" } : { type: "erase", all: mods.ctrlKey || mods.altKey };
-      if (s.drilled) {
-        // A chat is archived, never hidden; one still working asks for a second press.
-        if (mods.shiftKey) return { type: "none" };
-        if (!s.busy || s.armed) return s.armed && (s.armedForMs < ARM_GUARD_MS || !s.released) ? { type: "ignore" } : { type: "archive" };
-        return { type: "arm" };
-      }
-      // Plugin screens cannot be archived, so ⌫ hides them like ⇧⌫. A workspace always asks twice.
-      if (mods.shiftKey || s.screen) return { type: "hide" };
+      // A session is archived or closed, never hidden. Plugin screens cannot be archived, so ⌫ hides them
+      // like ⇧⌫. Everything else (a workspace, a chat, a terminal) asks for a second press.
+      if (s.drilled && mods.shiftKey) return { type: "none" };
+      if (!s.drilled && (mods.shiftKey || s.screen)) return { type: "hide" };
       if (!s.armed) return { type: "arm" };
       return s.armedForMs < ARM_GUARD_MS || !s.released ? { type: "ignore" } : { type: "archive" };
   }
   if (key.length === 1 && (!mods.metaKey || s.metaTypes) && (s.query || key !== " ")) return { type: "type", text: key };
   return { type: "none" };
-}
-
-/** A chat that is working or waiting for you is archived on a second ⌫; any other is archived at once. */
-export function chatArchiveNeedsConfirm(chat: AgentInfo): boolean {
-  return chat.status === "running" || chat.status === "needs_input";
 }
 
 /**
@@ -1012,13 +1077,12 @@ export function nextArmed(current: string | null, selected: string | null, actio
 }
 
 /**
- * What a click on a chat's hover × does. A busy chat is armed first; the second click needs the same
- * 250 ms as ⌫, and no × click counts within 250 ms of an archive, so a double-click cannot reach the row
+ * What a click on a session's hover × does. The first click arms the row, as ⌫ does; the second needs the
+ * same 250 ms, and no × click counts within 250 ms of an archive, so a double-click cannot reach the row
  * that moved up under the pointer.
  */
-export function clickArchiveAction(s: { busy: boolean; armed: boolean; armedForMs: number; sinceArchiveMs: number }): "arm" | "archive" | "ignore" {
+export function clickArchiveAction(s: { armed: boolean; armedForMs: number; sinceArchiveMs: number }): "arm" | "archive" | "ignore" {
   if (s.sinceArchiveMs < ARM_GUARD_MS) return "ignore";
-  if (!s.busy) return "archive";
   if (!s.armed) return "arm";
   return s.armedForMs < ARM_GUARD_MS ? "ignore" : "archive";
 }
@@ -1029,12 +1093,12 @@ export const ARM_MS = 4000;
 export const ARM_GUARD_MS = 250;
 export const ARCHIVE_ERROR_MS = 3000;
 
-/** The hint-line text for a failed archive, kept short. */
-export function archiveError(error: unknown): string {
+/** The hint-line text for a failed archive (or terminal close), kept short. */
+export function archiveError(error: unknown, verb: "archive" | "close" = "archive"): string {
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   const message = raw.replace(/\s+/g, " ").trim();
-  if (!message) return "Couldn't archive";
-  const text = `Couldn't archive: ${message}`;
+  if (!message) return `Couldn't ${verb}`;
+  const text = `Couldn't ${verb}: ${message}`;
   return text.length > 80 ? `${text.slice(0, 79)}…` : text;
 }
 
