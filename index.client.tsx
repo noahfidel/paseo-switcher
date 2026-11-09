@@ -3,11 +3,14 @@ import { Platform } from "react-native";
 import { makeSettings } from "./client/settings";
 import { SHORTCUTS } from "./client/model";
 import { installSwitcher } from "./client/switcher";
+import { projectIcon } from "./shared/icons";
 
 export default function contribute(client: PluginClientContext) {
   // The shortcut only reaches the page in the desktop app (and the web app outside a browser tab).
   if (Platform.OS !== "web") return () => {};
-  const switcher = installSwitcher(client.paseo);
+  const switcher = installSwitcher(client.paseo, {
+    projectIcon: async (rootPath) => (await client.rpc(projectIcon, { rootPath })).icon,
+  });
   const switchItem = () =>
     client.addCommandCenterItem({
       id: "switch-workspace",

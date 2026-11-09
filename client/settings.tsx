@@ -29,6 +29,7 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
     const [includeScreens, setIncludeScreens] = useState(switcher.getIncludeScreens());
     const [hidden, setHidden] = useState(switcher.getHidden());
     const [countMessages, setCountMessages] = useState(switcher.getCountMessages());
+    const [repoIcons, setRepoIcons] = useState(switcher.getRepoIcons());
     return (
       <>
       <SettingsSection title="Switcher">
@@ -88,6 +89,15 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
             onValueChange={(value) => {
               switcher.setCountMessages(value);
               setCountMessages(switcher.getCountMessages());
+            }}
+          />
+          <SettingsSwitch
+            label="Repo icons"
+            hint="Show each workspace's project icon: an icon file in the repo, else the avatar of the GitHub account that owns it (fetched at most once a day per account). Off: nothing is read or fetched."
+            value={repoIcons}
+            onValueChange={(value) => {
+              switcher.setRepoIcons(value);
+              setRepoIcons(switcher.getRepoIcons());
             }}
           />
         </SettingsCard>

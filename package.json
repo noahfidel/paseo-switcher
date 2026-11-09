@@ -24,11 +24,14 @@
     "assets/",
     "OVERVIEW.md",
     "index.client.tsx",
+    "index.server.ts",
     "client/",
+    "server/",
+    "shared/",
     "docs/media/"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "test": "node --test test/*.test.ts",
     "verify": "npm run typecheck && npm test",
     "e2e": "node test/e2e/run.mjs",
@@ -37,6 +40,7 @@
   "devDependencies": {
     "@getpaseo/plugin": "0.15.0",
     "@tanstack/react-query": "^5.90.11",
+    "@types/node": "^26.6.6",
     "@types/react": "~19.2.0",
     "playwright-core": "^1.58.2",
     "react": "19.1.0",

@@ -4,7 +4,7 @@ Two layers:
 
 | Command | What it covers | Needs |
 | --- | --- | --- |
-| `npm run verify` | Typecheck and unit tests for the ordering logic (`test/model.test.ts`) | Nothing |
+| `npm run verify` | Typecheck (client, and the daemon side with Node types) and unit tests: ordering and icons (`test/model.test.ts`, `test/icons.test.ts`, `test/screen-icons.test.ts`), the repo icon lookup against temporary repos with a fake fetch, and the RPC contracts (`test/repo-icons.test.ts`) | Nothing |
 | `npm run e2e` | Behavior and performance in Paseo's real web UI, against your local daemon (`test/e2e/run.mjs`) | A running daemon with this plugin installed |
 
 Run `npm run e2e -- --reload` before a release. It also reloads the plugin with `paseo plugin reload paseo-switcher` and checks that it cleans up after itself. Add `--headed` to watch the browser if you have a display.
@@ -124,7 +124,7 @@ P10 and P11 read the `pws:snapshot`, `pws:serialize` (with its `pws:xml` and `pw
 
 **Lifecycle (R, E):** after a plugin reload there is exactly one switcher, which still claims Ctrl+Tab (`--reload` only). The plugin raised no page errors.
 
-**Icons (manual, not in `npm run e2e`):** open a plugin screen that has a header icon, stay a second, then open the switcher in List layout: its row shows that icon, muted, and a screen with no icon keeps the puzzle. Open a screen whose sidebar row is highlighted while it is open (Flowly's board, Flowly Linear with its PNG mark, paseo-bots Schedules): its row and its Thumbnails placeholder show the sidebar row's icon; collapse the sidebar, revisit it, and the icon stays. With paseo-bots installed, a workspace whose most recently active bot-labelled chat is with a bot shows the bot's avatar at 16px, also after navigating (which re-runs the plugin) and after editing the bot on the Bots screen while the switcher is open.
+**Icons (manual, not in `npm run e2e`):** open a plugin screen that has a header icon, stay a second, then open the switcher in List layout: its row shows that icon, muted, and a screen with no icon keeps the puzzle. Open a screen whose sidebar row is highlighted while it is open (Flowly's board, Flowly Linear with its PNG mark, paseo-bots Schedules): its row and its Thumbnails placeholder show the sidebar row's icon; collapse the sidebar, revisit it, and the icon stays. With **Repo icons** on, a workspace whose repo has a favicon or logo shows it; one with none and a GitHub `origin` shows the owner's avatar; one on another host keeps the branch icon; a bot workspace keeps its bot avatar. `paseo plugin logs paseo-switcher` shows no errors. Turn **Repo icons** off and the branch icons return with no new `icons.project` calls. With paseo-bots installed, a workspace whose most recently active bot-labelled chat is with a bot shows the bot's avatar at 16px, also after navigating (which re-runs the plugin) and after editing the bot on the Bots screen while the switcher is open.
 
 ## When a check fails
 

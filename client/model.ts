@@ -16,6 +16,8 @@ export interface WorkspaceInfo {
   ahead?: number;
   /** Hidden from the sidebar. */
   background?: boolean;
+  /** The project's root directory on the host, for its repo icon. */
+  projectRoot?: string;
 }
 
 export interface PullRequestInfo {
@@ -832,12 +834,55 @@ export function scopeSvgIds(svg: string, prefix: string): string {
   });
 }
 
-/** An image URL safe to put in an img: http(s) or a raster data URL. */
-export function safeImageUrl(url: unknown): string | null {
+/**
+ * An image URL safe to put in an img: http(s) or a raster data URL. `svg: true` also allows svg and ico data
+ * URLs, for an img only: a browser runs no script and loads nothing external for an svg drawn as an image.
+ */
+export function safeImageUrl(url: unknown, options: { svg?: boolean } = {}): string | null {
   if (typeof url !== "string" || url.length > 2_000_000) return null;
   if (/^https?:\/\/[^\s"'<>\\]+$/i.test(url)) return url;
   if (/^data:image\/(png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/.test(url)) return url;
+  if (options.svg && /^data:image\/(svg\+xml|x-icon);base64,[A-Za-z0-9+/=]+$/.test(url)) return url;
   return null;
+}
+
+// ---- repo icons -------------------------------------------------------------------------------------
+
+export const DEFAULT_REPO_ICONS = true;
+
+export function parseRepoIcons(value: unknown): boolean {
+  return typeof value === "boolean" ? value : DEFAULT_REPO_ICONS;
+}
+
+/** How long the switcher keeps a project's icon (or its absence) before asking the host again. */
+export const REPO_ICON_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** What the host returns for a project: an image type and its bytes. */
+export interface ProjectIconData {
+  mimeType: string;
+  dataBase64: string;
+}
+
+/** The icon as a data URL for an img, or null when its type is not an image type the switcher draws. */
+export function repoIconUrl(icon: ProjectIconData | null | undefined): string | null {
+  if (!icon || !/^image\/(png|jpeg|gif|webp|svg\+xml|x-icon)$/.test(icon.mimeType)) return null;
+  return safeImageUrl(`data:${icon.mimeType};base64,${icon.dataBase64}`, { svg: true });
+}
+
+/** A project root's icon as last answered (null: none), and when. */
+export type RepoIconCache = ReadonlyMap<string, { url: string | null; at: number }>;
+
+/** Project roots of the workspaces on show that have no fresh answer and no request in flight, each once. */
+export function repoIconRoots(cards: readonly Card[], cache: RepoIconCache, pending: ReadonlySet<string>, now: number): string[] {
+  const roots: string[] = [];
+  for (const card of cards) {
+    const root = card.info?.projectRoot;
+    if (!root || card.screen || pending.has(root) || roots.includes(root)) continue;
+    const hit = cache.get(root);
+    if (hit && now - hit.at <= REPO_ICON_TTL_MS) continue;
+    roots.push(root);
+  }
+  return roots;
 }
 
 /** The agent tab last seen focused in a workspace, and when (epoch ms; 0 for data saved before times were kept). */

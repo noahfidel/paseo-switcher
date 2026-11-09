@@ -29,6 +29,11 @@ import {
   isImageIcon,
   nextScreenIcon,
   sidebarRowSelector,
+  DEFAULT_REPO_ICONS,
+  parseRepoIcons,
+  repoIconRoots,
+  repoIconUrl,
+  type ProjectIconData,
   migrateHidden,
   clampIndex,
   setHidden,
@@ -130,6 +135,7 @@ const HIDDEN_KEY = "paseo-switcher:hidden";
 const LEGACY_SKIPPED_SCREENS_KEY = "paseo-switcher:skipped-screens";
 const SCREEN_TITLE = '[data-testid="plugin-surface-title"]';
 const BACKGROUND_KEY = "paseo-switcher:include-background";
+const REPO_ICONS_KEY = "paseo-switcher:repo-icons";
 /** Last focused agent tab per workspace key. */
 const AGENTS_KEY = "paseo-switcher:last-agent";
 const HOSTS_KEY = "@paseo:daemon-registry";
@@ -199,12 +205,19 @@ export interface Switcher {
   unhide(key: string): void;
   getCountMessages(): boolean;
   setCountMessages(count: boolean): void;
+  getRepoIcons(): boolean;
+  setRepoIcons(show: boolean): void;
   /** Called after the shortcut changes, so labels that name it can follow. Returns an unsubscribe. */
   onShortcutChange(listener: (shortcut: Shortcut) => void): () => void;
   dispose(): void;
 }
 
-export function installSwitcher(paseo: Paseo): Switcher {
+export interface SwitcherOptions {
+  /** Asks this plugin's daemon side for a project's icon (see shared/icons.ts). */
+  projectIcon?: (rootPath: string) => Promise<ProjectIconData | null>;
+}
+
+export function installSwitcher(paseo: Paseo, options: SwitcherOptions = {}): Switcher {
   const doc = g.document;
   const win = g.window;
   const noop: Switcher = {
@@ -223,6 +236,8 @@ export function installSwitcher(paseo: Paseo): Switcher {
     unhide() {},
     getCountMessages: () => DEFAULT_COUNT_MESSAGES,
     setCountMessages() {},
+    getRepoIcons: () => DEFAULT_REPO_ICONS,
+    setRepoIcons() {},
     onShortcutChange: () => () => {},
     dispose() {},
   };
@@ -263,6 +278,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   let includeBackground = parseIncludeBackground(readJson(BACKGROUND_KEY, DEFAULT_INCLUDE_BACKGROUND));
   // A reinstalled switcher (Paseo re-runs the plugin after a route change) starts from what the last one loaded.
   const carried = carriedLists(g[CARRY_KEY], includeBackground);
+  const carriedIconCache = g[CARRY_KEY]?.repoIcons;
   g[CARRY_KEY] = undefined;
   let workspaces: ReadonlyMap<string, WorkspaceInfo> | null = carried?.workspaces ?? null;
   let workspacesAt = carried?.workspacesAt ?? 0;
@@ -271,6 +287,11 @@ export function installSwitcher(paseo: Paseo): Switcher {
   /** The host's agents, for the "most recently active" fallback; tagged with the host they came from. */
   let agents: { serverId: string | null; list: AgentInfo[] } | null = carried?.agents ?? null;
   let agentsAt = carried?.agentsAt ?? 0;
+  /** Show each workspace's repo icon (asked of the daemon side lazily, per project root). */
+  let repoIcons = parseRepoIcons(readJson(REPO_ICONS_KEY, DEFAULT_REPO_ICONS));
+  /** Answers per project root, carried across reinstalls like the lists (whatever the background setting). */
+  const repoIconCache: Map<string, { url: string | null; at: number }> = carriedIconCache instanceof Map ? carriedIconCache : new Map();
+  const repoIconPending = new Set<string>();
   /** Rasterized thumbnails by workspace key, oldest first. Each canvas records its theme. */
   const thumbs = new Map<string, Node>();
 
@@ -476,6 +497,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
             statusAt: latest(w.statusEnteredAt),
             ahead: w.gitRuntime?.aheadOfOrigin ?? 0,
             background: Boolean(w.background),
+            projectRoot: w.projectRootPath || undefined,
             pr: pr
               ? {
                   number: pr.number ?? null,
@@ -1028,6 +1050,39 @@ export function installSwitcher(paseo: Paseo): Switcher {
     root.replaceChildren(...parts);
     if (fresh) host.appendChild(root);
     select();
+    requestRepoIcons();
+  }
+
+  /** Asks for the repo icons of the workspaces on show, after this render, one request per project root. */
+  function requestRepoIcons() {
+    const ask = options.projectIcon;
+    if (!repoIcons || !ask) return;
+    const roots = repoIconRoots(cards, repoIconCache, repoIconPending, Date.now());
+    if (!roots.length) return;
+    for (const root of roots) repoIconPending.add(root);
+    setTimeout(() => {
+      for (const root of roots) {
+        Promise.resolve()
+          .then(() => ask(root))
+          .then(
+            (icon) => repoIconUrl(icon),
+            () => null,
+          )
+          .then((url) => {
+            repoIconPending.delete(root);
+            repoIconCache.set(root, { url, at: Date.now() });
+            if (url && root && repoIcons && cards.some((c) => c.info?.projectRoot === root)) render();
+          });
+      }
+    }, 0);
+  }
+
+  /** The repo icon of a workspace card, when one is known and the setting is on. */
+  function repoIcon(card: Card, px: number): Node | null {
+    const root = card.info?.projectRoot;
+    const url = repoIcons && root && !card.screen ? repoIconCache.get(root)?.url : null;
+    const safe = url ? safeImageUrl(url, { svg: true }) : null;
+    return safe ? imageNode(safe, "pws-avatar pws-repo-icon", px) : null;
   }
 
   function narrow(): boolean {
@@ -1243,7 +1298,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
   function placeholder(card: Card, project: string | null): Node {
     const box = el("div", "pws-placeholder");
     const plugin = Boolean(card.screen);
-    const avatar = card.screen ? null : botAvatar(card, 32);
+    const avatar = card.screen ? null : botAvatar(card, 32) ?? repoIcon(card, 32);
     if (plugin || avatar) {
       const mark = el("div", avatar ? "pws-initial pws-avatar-tile" : "pws-initial");
       mark.appendChild(avatar ?? leadIcon(card, "folder"));
@@ -1260,7 +1315,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
       const own = card.screen.icon ? drawScreenIcon(card.screen.icon) : null;
       return own ?? icon("puzzle", "pws-icon pws-badge-icon");
     }
-    return botAvatar(card, 16) ?? icon(fallback, "pws-icon pws-badge-icon");
+    return botAvatar(card, 16) ?? repoIcon(card, 16) ?? icon(fallback, "pws-icon pws-badge-icon");
   }
 
   /** A screen's stored icon: a raster data URL as an img, else svg markup. Both are cleaned again before drawing. */
@@ -1549,6 +1604,11 @@ export function installSwitcher(paseo: Paseo): Switcher {
       // Visits start counting again from the screen on show.
       pendingScreen = null;
     },
+    getRepoIcons: () => repoIcons,
+    setRepoIcons(next) {
+      repoIcons = parseRepoIcons(next);
+      writeJson(REPO_ICONS_KEY, repoIcons);
+    },
     getCountMessages: () => countMessages,
     setCountMessages(next) {
       const value = parseCountMessages(next);
@@ -1570,7 +1630,7 @@ export function installSwitcher(paseo: Paseo): Switcher {
     },
     dispose() {
       close();
-      g[CARRY_KEY] = { includeBackground, workspaces, workspacesAt, homeServer, agents, agentsAt };
+      g[CARRY_KEY] = { includeBackground, workspaces, workspacesAt, homeServer, agents, agentsAt, repoIcons: repoIconCache };
       shortcutListeners.clear();
       clearInterval(routeTimer);
       clearInterval(refreshTimer);
@@ -1882,6 +1942,7 @@ const CSS = `
 .pws-icon-img { display: block; object-fit: contain; }
 .pws-avatar { width: 16px; height: 16px; flex: 0 0 auto; display: block; }
 .pws-avatar-img { object-fit: cover; border-radius: 50%; }
+.pws-repo-icon { object-fit: contain; border-radius: 3px; }
 .pws-initial.pws-avatar-tile { background: none; }
 .pws-initial .pws-avatar { width: 32px; height: 32px; }
 .pws-placeholder-project { color: var(--pws-muted); font-size: 13px; font-weight: 550; padding: 0 12px; text-align: center; overflow-wrap: anywhere; }
