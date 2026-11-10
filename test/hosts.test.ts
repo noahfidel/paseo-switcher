@@ -582,13 +582,13 @@ test("typing in the session list matches terminal names as well as chat titles",
   }
 });
 
-test("releasing the modifier on a terminal opens it through the workspace's ?open=terminal: route", async () => {
+test("Enter on a terminal opens it through the workspace's ?open=terminal: route", async () => {
   const { page, switcher } = await openWithChats(["c1"], ["t1"]);
   try {
     page.press(RIGHT);
     await tick(30);
     page.press(DOWN);
-    page.release(RELEASE);
+    page.press({ key: "Enter", code: "Enter" });
     await tick(30);
     assert.deepEqual(page.pushed, [`/h/srv_b/workspace/wks_b1?open=${encodeURIComponent("terminal:t1")}`]);
   } finally {
