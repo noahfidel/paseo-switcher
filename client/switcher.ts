@@ -1679,11 +1679,16 @@ function createSwitcher(installs: Installation[]): Switcher {
 
   // ---- one workspace's sessions --------------------------------------------------------------------
 
-  /** Replaces the list with the selected workspace's sessions (chats and terminals). Plugin screens have none. */
+  /**
+   * Replaces the list with the selected workspace's sessions (chats and terminals). Plugin screens have none.
+   * Like typing, it turns a held switcher into one that waits for Enter or a click, so you can let go of the
+   * modifier and keep navigating the sessions; going back with ← keeps it that way.
+   */
   function drillIn() {
     setArmed(null);
     const card = cards[index];
     if (!card || !canDrillInto(card)) return;
+    mode = "sticky";
     drill = { key: card.key, name: cardName(card), sessions: [], total: 0, loaded: false, failed: false, terminalsFailed: false, index: 0, query: "" };
     refreshSessions();
     clearTimeout(showTimer);

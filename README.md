@@ -43,14 +43,14 @@ paseo plugin install paseo-switcher
 | Release Cmd | Switch to the selected workspace |
 | Quick Cmd+` | Go straight back to the previous workspace |
 | Arrows, Enter | Move and switch |
-| → (↓ in Thumbnails) | Show the selected workspace's sessions (chats and terminals); move, then release Cmd or press Enter to open one |
+| → (↓ in Thumbnails) | Show the selected workspace's sessions (chats and terminals); the switcher then stays open, so you can release Cmd and move with the arrows, then press Enter to open one |
 | ← | Back from the sessions to the workspaces |
 | Type | Filter all workspaces (or, in a workspace's sessions, its chat titles and terminal names); the switcher then stays open until Enter or a click |
 | ⌫ | Archive the selected workspace in Paseo: the first press marks it red, a second ⌫ archives it (this removes a worktree workspace's folder). On a plugin screen it hides the screen instead. In a workspace's sessions it archives the selected chat or closes the selected terminal, also on the second ⌫ |
 | ⇧⌫ | Hide the selected workspace or plugin screen from the switcher (the × on a hovered row does the same) |
 | Esc | Clear the filter, then cancel |
 
-With text typed, ⌫ erases it (Ctrl or Option+⌫ clears it all). Moving, typing, any other key, or four seconds cancels a marked row. Holding ⌫ never archives: only a fresh press does, and a second one counts only after the first was let go and a quarter second has passed. After archiving or hiding, the switcher waits for Enter or a click instead of switching when you release Cmd. If Paseo cannot archive, the row stays and the hint says why. The × on a hovered chat or terminal archives or closes it with the same rule: the first click marks it, the second acts.
+With text typed, ⌫ erases it (Ctrl or Option+⌫ clears it all). Moving, typing, any other key, or four seconds cancels a marked row. Holding ⌫ never archives: only a fresh press does, and a second one counts only after the first was let go and a quarter second has passed. After showing sessions, archiving or hiding, the switcher waits for Enter or a click instead of switching when you release Cmd. If Paseo cannot archive, the row stays and the hint says why. The × on a hovered chat or terminal archives or closes it with the same rule: the first click marks it, the second acts.
 
 A workspace's sessions are its chats, listed with the one you last had open there first, then by last change, with chats a routine or bot started after yours, and then its terminals, in the order Paseo lists them (terminals have no timestamps to sort by). A chat shows its title, its provider (Claude, Codex, …) and its status, in the words Paseo's sidebar uses; a terminal shows its name and a terminal icon. Opening a terminal reveals its tab in the workspace. The chats come from the host's 200 most recently changed; when it has more, the header says "recent sessions", as a workspace's oldest chats may be missing.
 

@@ -346,7 +346,7 @@ A `solid` pill under the sheet that lists only the keys that work right now:
 - Opened from the Command Center: Enter "switch", arrows "move", → "sessions", ⌫ "archive", ⇧⌫ "hide", Esc "close", "Type to filter".
 - Filtering: Enter "switch", arrows "move", → "sessions", Esc "clear".
 - No match: Backspace "edit", Esc "clear".
-- In a workspace's sessions, holding: Ctrl "release to open", Shift Tab "back", ← "workspaces", ⌫ "archive" ("close" on a terminal), Esc "cancel", "Type to filter"; otherwise Enter "open", ↑↓ "move", ← "workspaces", ⌫ "archive" or "close", Esc "close", "Type to filter"; filtering and no match as above with "open" for "switch". Touch: "Tap a session to open it".
+- In a workspace's sessions the switcher is always sticky (→ makes a held one so, and ← keeps it): Enter "open", ↑↓ "move", ← "workspaces", ⌫ "archive" or "close", Esc "close", "Type to filter"; filtering and no match as above with "open" for "switch". Touch: "Tap a session to open it".
 
 Arrows are ↑↓ in the list and ←→ in the strip, where "sessions" is ↓. "sessions" is left out when only plugin screens are listed. Keycaps are 18px tall, at least 18px wide, with 5px corners, a `key` face, a `border` edge and a 1px lip. In the hint they use ink; on rows and cards they use muted.
 
@@ -372,7 +372,7 @@ Hold mode keeps Ctrl down throughout, so the keys depend on Shift alone. With an
 - **Arming.** Every workspace, chat and terminal needs a second Backspace: archiving a worktree workspace deletes its folder, and closing a terminal ends its process. The first press arms that one row: it takes a danger tint (`bad` at 14% under a 1px `bad` inset ring, over the selection tint) and the hint pill is replaced by "⌫ again to archive" ("⌫ again to close" on a terminal) in `bad` ink (touch: "Tap × again to archive" or "… to close"). Moving the selection, hovering another row, typing, any other key, or 4 seconds disarms it. Two guards keep a held key from archiving: a repeating (held) Backspace with an empty query does nothing at all (it still erases typed text), and a second Backspace is ignored, without disarming, until 250 ms have passed and a Backspace keyup has been seen since arming (so synthetic repeats without the repeat flag cannot archive).
 - **Session ×.** Each chat and terminal row has the same 22px hover × as workspaces, labelled "Archive chat" or "Close terminal". The first click arms the row, the second (after the same 250 ms guard) archives or closes it; no × click counts within 250 ms of an archive, so a double-click cannot archive the row that moves under the pointer.
 - **After.** The row leaves the list at once and the selection stays on its index, clamped. Archiving or closing a workspace's last session returns to the workspace list. The host's lists are then reloaded; a list that was already in flight cannot bring the row back.
-- **Hold mode.** Archiving or hiding a row, like typing, makes a held switcher wait for Enter or a click, so releasing the modifier does not open whichever row moved under the selection.
+- **Hold mode.** Archiving or hiding a row, like typing or drilling into a workspace's sessions with →, makes a held switcher wait for Enter or a click, so releasing the modifier does not open whichever row moved under the selection.
 - **Failure.** The row comes back and the hint pill reads "Couldn't archive: <message>" ("Couldn't close: …" for a terminal) (at most 80 characters) in `bad` ink for 3 seconds.
 
 ### Motion

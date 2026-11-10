@@ -597,6 +597,26 @@ test("releasing the modifier on a terminal opens it through the workspace's ?ope
   }
 });
 
+test("drilling in makes a held switcher sticky: releasing the modifier opens nothing, and Enter opens the selected session", async () => {
+  const { page, switcher } = await openWithChats(["c1"], ["t1"]);
+  try {
+    page.press(RIGHT);
+    await tick(30);
+    page.release(RELEASE);
+    await tick(30);
+    assert.deepEqual(page.pushed, [], "releasing after → opens nothing");
+    page.press(DOWN);
+    await tick(20);
+    assert.deepEqual(page.pushed, [], "moving does not open anything either");
+    page.press({ key: "Enter", code: "Enter" });
+    await tick(30);
+    assert.deepEqual(page.pushed, [`/h/srv_b/workspace/wks_b1?open=${encodeURIComponent("terminal:t1")}`]);
+  } finally {
+    switcher.dispose();
+    cleanGlobals();
+  }
+});
+
 test("⌫ on a terminal arms it with a close hint, and the second ⌫ kills it through its own host", async () => {
   const { page, archived, switcher } = await openWithChats([], ["t1", "t2"]);
   try {
