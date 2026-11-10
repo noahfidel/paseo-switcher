@@ -343,12 +343,13 @@ test("an ignored key neither arms nor disarms; every other key still disarms", (
   assert.equal(nextArmed(null, "k1", { type: "ignore" }), null);
 });
 
-test("a second ⌫ within 250 ms of arming is ignored, without disarming, and archives after that", () => {
+test("a second ⌫ within 60 ms of arming is ignored as bounce, without disarming; a quick double-tap archives", () => {
   assert.deepEqual(press("Backspace", { armed: true, armedForMs: 0 }), { type: "ignore" });
-  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 249 }), { type: "ignore" });
-  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 250 }), { type: "archive" });
-  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 249, drilled: true }), { type: "ignore" });
-  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 250, drilled: true }), { type: "archive" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 59 }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 60 }), { type: "archive" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 120 }), { type: "archive" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 59, drilled: true }), { type: "ignore" });
+  assert.deepEqual(press("Backspace", { armed: true, armedForMs: 120, drilled: true }), { type: "archive" });
   // Hiding a screen is not archiving; the guard does not apply to it.
   assert.deepEqual(press("Backspace", { screen: true, armedForMs: 0 }), { type: "hide" });
 });

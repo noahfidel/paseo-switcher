@@ -1078,7 +1078,7 @@ export function keyAction(key: string, s: KeyState, mods: { ctrlKey: boolean; al
       if (s.drilled && mods.shiftKey) return { type: "none" };
       if (!s.drilled && (mods.shiftKey || s.screen)) return { type: "hide" };
       if (!s.armed) return { type: "arm" };
-      return s.armedForMs < ARM_GUARD_MS || !s.released ? { type: "ignore" } : { type: "archive" };
+      return s.armedForMs < KEY_GUARD_MS || !s.released ? { type: "ignore" } : { type: "archive" };
   }
   if (key.length === 1 && (!mods.metaKey || s.metaTypes) && (s.query || key !== " ")) return { type: "type", text: key };
   return { type: "none" };
@@ -1106,8 +1106,13 @@ export function clickArchiveAction(s: { armed: boolean; armedForMs: number; sinc
 
 /** How long an armed row waits for its second ⌫, and how long a failure shows in the hint line. */
 export const ARM_MS = 4000;
-/** A second ⌫ sooner than this after arming is ignored: it is a bounce or a repeat, not a decision. */
+/** A second × click sooner than this after arming (or after an archive) is ignored: a double-click must not reach the next row. */
 export const ARM_GUARD_MS = 250;
+/**
+ * A second ⌫ sooner than this after arming is ignored as key bounce. Repeats are already ignored and a
+ * keyup is needed between presses, so this stays short enough for a quick deliberate double-tap.
+ */
+export const KEY_GUARD_MS = 60;
 export const ARCHIVE_ERROR_MS = 3000;
 
 /** The hint-line text for a failed archive (or terminal close), kept short. */
