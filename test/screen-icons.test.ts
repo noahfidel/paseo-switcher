@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   MAX_RASTER_ICON_BYTES,
   cleanScreenIcon,
+  healScreenTitle,
   isImageIcon,
   nextScreenIcon,
   parseScreens,
@@ -113,4 +114,15 @@ test("screensWithoutIcon lists the stored screens that have no icon yet", () => 
     [pluginScreenKey("srv", "a", "b")]: { title: "A", search: "" },
   });
   assert.deepEqual(screensWithoutIcon(screens), [pluginScreenKey("srv", "a", "b")]);
+});
+
+test("healScreenTitle replaces a sibling's title or the prettified plugin id with the own label", () => {
+  assert.equal(healScreenTitle("Flowly", "Linear", ["Flowly"], "flowly"), "Linear");
+  assert.equal(healScreenTitle("Paseo Bots", "Bots", [], "paseo-bots"), "Bots");
+});
+
+test("healScreenTitle keeps a genuinely different title, a missing own label and an equal title", () => {
+  assert.equal(healScreenTitle("My Linear", "Linear", ["Flowly"], "flowly"), "My Linear");
+  assert.equal(healScreenTitle("Flowly", null, ["Flowly"], "flowly"), "Flowly");
+  assert.equal(healScreenTitle("Linear", "Linear", ["Linear"], "flowly"), "Linear");
 });

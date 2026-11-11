@@ -13,6 +13,7 @@ registerHooks({
   },
 });
 const { installSwitcher } = await import("../client/switcher.ts");
+const { pluginRowsSelector, screenRowSelector, sidebarRowSelector } = await import("../client/model.ts");
 
 const g = globalThis as any;
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,7 +43,7 @@ function element(): any {
 }
 
 /** A fake page; `keydown` counts the live keydown listeners on the window. */
-function fakePage(pathname: string, storage: Record<string, string> = {}) {
+function fakePage(pathname: string, storage: Record<string, string> = {}, nodes?: (selector: string) => any[]) {
   const listeners = new Map<string, Set<unknown>>();
   const store = new Map(Object.entries(storage));
   const created: any[] = [];
@@ -57,6 +58,7 @@ function fakePage(pathname: string, storage: Record<string, string> = {}) {
     head: element(),
     body: element(),
     hidden: false,
+    ...(nodes ? { querySelectorAll: (selector: string) => nodes(selector), querySelector: (selector: string) => nodes(selector)[0] ?? null } : {}),
     createElement: make,
     createTextNode: (text: string) => Object.assign(make(), { textContent: text }),
   };
@@ -1236,6 +1238,98 @@ test("a hidden plugin screen on show records no visit", async () => {
     switcher.open();
     await tick();
     assert.equal(stored(page, VISITS)[hidden], undefined);
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+/** A fake page node for the plugin-screen title and sidebar row tests. */
+function fakeNode(attrs: Record<string, string>, text: string, drawn = true): any {
+  return {
+    textContent: text,
+    getClientRects: () => (drawn ? [{}] : []),
+    getAttribute: (name: string) => attrs[name] ?? null,
+    previousElementSibling: null,
+    querySelectorAll: () => [],
+    tagName: "DIV",
+  };
+}
+
+const SCREEN_TITLE_SELECTOR = '[data-testid="plugin-surface-title"]';
+const LINEAR_KEY = "plugin-screen|srv_a|flowly|linear";
+const SCREENS = "paseo-switcher:screens";
+
+function flowlyRows(): any[] {
+  return [
+    fakeNode({ "data-testid": "plugin-sidebar-flowly-board", "aria-label": "Flowly", "aria-selected": "false" }, "Flowly"),
+    fakeNode({ "data-testid": "plugin-sidebar-flowly-linear", "aria-label": "Linear", "aria-selected": "true" }, "Linear"),
+  ];
+}
+
+test("a plugin screen's title is the drawn header, not a hidden earlier screen's", async () => {
+  const rows = flowlyRows();
+  const titles = [fakeNode({}, "Flowly", false), fakeNode({}, "Linear")];
+  const page = fakePage("/h/srv_a/plugin/flowly/surface/linear", {}, (selector) => {
+    if (selector === SCREEN_TITLE_SELECTOR) return titles;
+    if (selector === screenRowSelector("flowly", "linear")) return [rows[1]];
+    if (selector === sidebarRowSelector("flowly")) return [rows[1]];
+    if (selector === pluginRowsSelector("flowly")) return rows;
+    return [];
+  });
+  try {
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.equal(stored(page, SCREENS)[LINEAR_KEY].title, "Linear");
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("opening the switcher heals a screen title taken from a sibling's header", async () => {
+  const rows = flowlyRows();
+  const page = fakePage(
+    "/h/srv_a/workspace/w1",
+    {
+      [VISITS]: JSON.stringify({ "plugin-screen|srv_a|flowly|board": 1, [LINEAR_KEY]: 2 }),
+      [SCREENS]: JSON.stringify({
+        "plugin-screen|srv_a|flowly|board": { title: "Flowly", search: "" },
+        [LINEAR_KEY]: { title: "Flowly", search: "" },
+      }),
+    },
+    (selector) => {
+      if (selector === screenRowSelector("flowly", "linear")) return [rows[1]];
+      if (selector === screenRowSelector("flowly", "board")) return [rows[0]];
+      if (selector === pluginRowsSelector("flowly")) return rows;
+      return [];
+    },
+  );
+  try {
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    switcher.open();
+    await tick();
+    const screens = stored(page, SCREENS);
+    assert.equal(screens[LINEAR_KEY].title, "Linear");
+    assert.equal(screens["plugin-screen|srv_a|flowly|board"].title, "Flowly");
+    switcher.dispose();
+  } finally {
+    cleanGlobals();
+  }
+});
+
+test("a plugin screen with no drawn title falls back to its own row's label", async () => {
+  const rows = flowlyRows();
+  const page = fakePage("/h/srv_a/plugin/flowly/surface/linear", {}, (selector) => {
+    if (selector === screenRowSelector("flowly", "linear")) return [rows[1]];
+    if (selector === pluginRowsSelector("flowly")) return rows;
+    return [];
+  });
+  try {
+    const switcher = installSwitcher(fakeApi("srv_a", [], []));
+    await tick();
+    assert.equal(stored(page, SCREENS)[LINEAR_KEY].title, "Linear");
     switcher.dispose();
   } finally {
     cleanGlobals();

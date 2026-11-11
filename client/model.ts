@@ -430,6 +430,22 @@ export function screenRowSelector(pluginId: string, screenId: string): string {
   return `[data-testid="plugin-sidebar-${id}"], [data-testid="plugin-sidebar-footer-${id}"]`;
 }
 
+/** Every sidebar row of a plugin, selected or not (footer rows too): `plugin-sidebar-<pluginId>-…`. */
+export function pluginRowsSelector(pluginId: string): string {
+  const id = pluginId.replace(/["\\]/g, "\\$&");
+  return `[data-testid^="plugin-sidebar-${id}-"], [data-testid^="plugin-sidebar-footer-${id}-"]`;
+}
+
+/**
+ * A stored screen title that was taken from the wrong header: Paseo keeps earlier plugin screens mounted but
+ * hidden, so a title may be a sibling row's label, or only the prettified plugin id. Such a title becomes the
+ * screen's own row label; any other title is kept.
+ */
+export function healScreenTitle(title: string, ownLabel: string | null, siblingLabels: readonly string[], pluginId: string): string {
+  if (!ownLabel || ownLabel === title) return title;
+  return siblingLabels.includes(title) || title === prettifyPluginId(pluginId) ? ownLabel : title;
+}
+
 /** Stored screens that have no icon yet, to fill in from their sidebar rows. */
 export function screensWithoutIcon(screens: Screens): string[] {
   return Object.keys(screens).filter((k) => !screens[k].icon);

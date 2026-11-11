@@ -62,7 +62,8 @@ import {
   nextScreenIcon,
   sidebarRowSelector,
   screenRowSelector,
-  screensWithoutIcon,
+  pluginRowsSelector,
+  healScreenTitle,
   pickRowIcon,
   DEFAULT_REPO_ICONS,
   parseRepoIcons,
@@ -154,10 +155,14 @@ import {
  *          `aria-selected="true"` while the plugin marks it active (see `sidebarRowSelector`). An <img> in it with a
  *          raster data URL is the icon, else its first <svg> that draws something (sanitized); RN-web draws a
  *          tinted image as an <img> beside a hidden svg that holds only the tint filter, which is skipped. Only a
- *          plugin's own rows know its current screen, so another plugin's row is never active then. When the
- *          switcher opens, a stored screen with no icon yet takes the icon of the row whose test ID is exactly
- *          `plugin-sidebar-<pluginId>-<screenId>` (or the footer's), selected or not (see `screenRowSelector`);
- *          with no such row it keeps its puzzle. Not public either: re-check on every upgrade.
+ *          plugin's own rows know its current screen, so another plugin's row is never active then. The title is
+ *          the drawn `plugin-surface-title` (first one with client rects): Paseo keeps earlier plugin screens
+ *          mounted but hidden, so several may exist. The screen's own row, whose test ID is exactly
+ *          `plugin-sidebar-<pluginId>-<screenId>` (or the footer's), selected or not (see `screenRowSelector`), is
+ *          preferred for the icon and supplies the fallback title via its `aria-label`. When the switcher opens,
+ *          a stored screen with no icon yet takes its own row's icon (with no such row it keeps its puzzle), and
+ *          a stored title taken from a sibling's header (a sibling row's label, or the prettified plugin id) is
+ *          healed to the own row's label. Not public either: re-check on every upgrade.
  *          Paseo 0.15 re-runs the plugin after each such navigation, so a disposed switcher leaves its
  *          loaded lists in `globalThis.__paseoSwitcherLists` for the next install.
  * - hosts: Paseo 0.15 evaluates the plugin's client once per connected host (`PluginRegistry.byHost`), each
@@ -674,18 +679,52 @@ function createSwitcher(installs: Installation[]): Switcher {
     }
   }
 
+  /** The first plugin-screen title that is drawn: Paseo keeps earlier plugin screens mounted but hidden, so several may exist. */
+  function drawnScreenTitle(): Node | null {
+    for (const node of Array.from(doc.querySelectorAll(SCREEN_TITLE)) as Node[]) {
+      if (node.getClientRects().length > 0) return node;
+    }
+    return null;
+  }
+
+  /** A screen's own sidebar row, else the plugin's selected one. Null when neither is found (or the IDs are odd). */
+  function screenRow(pluginId: string, screenId: string): Node | null {
+    try {
+      return doc.querySelector(screenRowSelector(pluginId, screenId)) ?? doc.querySelector(sidebarRowSelector(pluginId));
+    } catch {
+      return null;
+    }
+  }
+
+  /** A sidebar row's label (its aria-label), trimmed; null when empty. */
+  function ariaLabelOf(row: Node | null): string | null {
+    return row?.getAttribute("aria-label")?.trim() || null;
+  }
+
+  /** The labels of a plugin's sidebar rows other than the screen's own. */
+  function siblingRowLabels(pluginId: string, screenId: string): string[] {
+    const own = new Set([`plugin-sidebar-${pluginId}-${screenId}`, `plugin-sidebar-footer-${pluginId}-${screenId}`]);
+    const labels: string[] = [];
+    for (const row of Array.from(doc.querySelectorAll(pluginRowsSelector(pluginId))) as Node[]) {
+      if (own.has(row.getAttribute("data-testid") ?? "")) continue;
+      const label = ariaLabelOf(row);
+      if (label) labels.push(label);
+    }
+    return labels;
+  }
+
   /** Keeps the latest params and shown title of the screen on show; the title may appear after the route does. */
-  function noteScreen(key: string, route: { pluginId: string; search: string }) {
-    const titleNode = doc.querySelector(SCREEN_TITLE);
+  function noteScreen(key: string, route: { pluginId: string; screenId: string; search: string }) {
+    const titleNode = drawnScreenTitle();
     const shown: string | null = titleNode?.textContent?.trim() || null;
-    // The highlighted sidebar row's icon wins; else the header badge decides once the title is drawn.
-    const row = doc.querySelector(sidebarRowSelector(route.pluginId));
+    // This screen's own row's icon wins; else the header badge decides once the title is drawn.
+    const row = screenRow(route.pluginId, route.screenId);
     const icon = nextScreenIcon(screens[key], {
       row: row ? sidebarRowIcon(row) : null,
       title: Boolean(titleNode),
       badge: titleNode ? screenIconSvg(titleNode) : null,
     });
-    const title = shown ?? screens[key]?.title ?? screenTitle(null, route.pluginId);
+    const title = shown ?? screens[key]?.title ?? ariaLabelOf(row) ?? screenTitle(null, route.pluginId);
     const next = recordScreen(screens, key, { title, search: route.search, ...icon });
     if (next === screens) return;
     screens = next;
@@ -709,18 +748,24 @@ function createSwitcher(installs: Installation[]): Switcher {
     );
   }
 
-  /** Stored screens with no icon take their own sidebar row's, selected or not. Quietly does nothing without one. */
+  /**
+   * Stored screens with no icon take their own sidebar row's, selected or not; a title taken from a sibling's
+   * header (or only the prettified plugin id) becomes the own row's label. Quietly does nothing without a row.
+   */
   function fillScreenIcons() {
     let next = screens;
-    for (const key of screensWithoutIcon(screens)) {
+    for (const key of Object.keys(screens)) {
       const parts = parsePluginScreenKey(key);
       if (!parts) continue;
       try {
         const row = doc.querySelector(screenRowSelector(parts.pluginId, parts.screenId));
-        const icon = row ? sidebarRowIcon(row) : null;
-        if (icon) next = recordScreen(next, key, { ...next[key], icon, iconFrom: "row" });
+        if (!row) continue;
+        const meta = next[key];
+        const icon = meta.icon ? null : sidebarRowIcon(row);
+        const title = healScreenTitle(meta.title, ariaLabelOf(row), siblingRowLabels(parts.pluginId, parts.screenId), parts.pluginId);
+        if (icon || title !== meta.title) next = recordScreen(next, key, { ...meta, title, ...(icon ? { icon, iconFrom: "row" as const } : {}) });
       } catch {
-        // An odd ID or markup leaves the screen with its puzzle icon.
+        // An odd ID or markup leaves the screen as it was.
       }
     }
     if (next === screens) return;
@@ -2705,7 +2750,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     getHidden: () =>
       hiddenKeys.map((key) => {
         const screen = parsePluginScreenKey(key);
-        if (screen) return { key, title: screens[key]?.title ?? screenTitle(null, screen.pluginId), subtitle: `Plugin · ${prettifyPluginId(screen.pluginId)}` };
+        if (screen) return { key, title: screens[key]?.title ?? ariaLabelOf(screenRow(screen.pluginId, screen.screenId)) ?? screenTitle(null, screen.pluginId), subtitle: `Plugin · ${prettifyPluginId(screen.pluginId)}` };
         const info = workspaceInfo(key) ?? knownNames[key];
         return { key, title: info?.name ?? "Workspace", subtitle: info?.project ?? "" };
       }),
