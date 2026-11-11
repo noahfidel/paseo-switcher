@@ -54,7 +54,7 @@ With text typed, ⌫ erases it (Ctrl or Option+⌫ clears it all). Moving, typin
 
 A workspace's sessions are its chats, listed with the one you last had open there first, then by last change, with chats a routine or bot started after yours, and then its terminals, in the order Paseo lists them (terminals have no timestamps to sort by). A chat shows its title, its provider (Claude, Codex, …) and its status, in the words Paseo's sidebar uses; a terminal shows its name and a terminal icon. Opening a terminal reveals its tab in the workspace. The chats come from the host's 200 most recently changed; when it has more, the header says "recent sessions", as a workspace's oldest chats may be missing.
 
-The keys above are for the default shortcut, **Cmd+`**. Choose **Ctrl+Tab**, **Option+Tab** or **Ctrl+`** under Settings; the modifier you hold and release is then Ctrl or Option. Paseo uses Ctrl+` itself (Toggle Explorer sidebar), so pick Ctrl+` only if you have unbound that.
+The keys above are for the default shortcut, **Cmd+`**. Choose **Ctrl+Tab**, **Option+Tab** or **Ctrl+`** under Settings; the modifier you hold and release is then Ctrl or Option. With a Tab shortcut, the modifier and ` also step back while the switcher is open (add Shift to step forward), as Cmd+` does beside Cmd+Tab on macOS; with the switcher closed, Ctrl+` stays Paseo's Toggle Explorer sidebar. Paseo uses Ctrl+` itself (Toggle Explorer sidebar), so pick Ctrl+` only if you have unbound that.
 
 While the switcher is open it takes every key, so typing never triggers a Paseo shortcut. Hovering a row selects it and clicking switches to it.
 

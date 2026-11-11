@@ -62,6 +62,26 @@ export function matchesShortcut(shortcut: Shortcut, e: KeyLike): boolean {
   return e.code === code && e.ctrlKey === (modifier === "Control") && e.altKey === (modifier === "Alt") && e.metaKey === (modifier === "Meta");
 }
 
+/**
+ * Which way a press steps the selection, or null when it is not a step. The shortcut steps forward
+ * (back with Shift). With a Tab shortcut, its modifier and ` step back (forward with Shift) while the
+ * switcher is open, as Cmd+` does beside Cmd+Tab on macOS; closed, that press is left to Paseo, which
+ * binds Ctrl+` to Toggle Explorer sidebar.
+ */
+export function shortcutStep(shortcut: Shortcut, e: KeyLike & { shiftKey: boolean }, open: boolean): 1 | -1 | null {
+  if (matchesShortcut(shortcut, e)) return e.shiftKey ? -1 : 1;
+  const { code, modifier } = SHORTCUTS[shortcut];
+  if (!open || code !== "Tab" || e.code !== "Backquote") return null;
+  const held = e.ctrlKey === (modifier === "Control") && e.altKey === (modifier === "Alt") && e.metaKey === (modifier === "Meta");
+  return held ? (e.shiftKey ? 1 : -1) : null;
+}
+
+/** The keycaps the hint shows for "back": ` with a Tab shortcut (Shift+Tab still works), else Shift and the key. */
+export function backKeys(shortcut: Shortcut): string[] {
+  const { code, keyLabel } = SHORTCUTS[shortcut];
+  return code === "Tab" ? ["`"] : ["Shift", keyLabel];
+}
+
 /** Releasing the chosen modifier commits the selection. */
 export function isReleaseKey(shortcut: Shortcut, key: string): boolean {
   return key === SHORTCUTS[shortcut].modifier;

@@ -2,7 +2,7 @@ Arc-style workspace switching for the Paseo desktop app. Hold Cmd and tap ` (the
 
 ## Keys
 
-- Cmd+` / Cmd+Shift+`: open the switcher and move forward or back (or Ctrl+Tab, Option+Tab or Ctrl+`, see the Shortcut setting)
+- Cmd+` / Cmd+Shift+`: open the switcher and move forward or back (or Ctrl+Tab, Option+Tab or Ctrl+`, see the Shortcut setting). With Ctrl+Tab or Option+Tab, Ctrl+` or Option+` also moves back while the switcher is open, and forward with Shift; while it is closed, the press is left to Paseo
 - Release the modifier (Cmd, or Ctrl or Option for the other shortcuts): switch to the selected workspace
 - Arrow keys move, Enter switches, Esc cancels
 - → on a workspace (↓ in the Thumbnails layout) lists its sessions in place: its chats (the one you last had open there first, then by last change, each with its provider and status), then its terminals in Paseo's order. Move as usual, then release the modifier, press Enter or click to open that chat or terminal; ← goes back to the workspaces.

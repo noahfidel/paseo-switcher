@@ -26,6 +26,8 @@ import {
   parseIncludeBackground,
   shouldListWorkspace,
   matchesShortcut,
+  shortcutStep,
+  backKeys,
   matchRanges,
   parseShortcut,
   SHORTCUTS,
@@ -303,6 +305,52 @@ test("a combo that is not the chosen shortcut does nothing", () => {
       assert.equal(matchesShortcut(chosen, combos[other]), chosen === other, `${chosen} vs ${other}`);
     }
   }
+});
+
+test("the shortcut steps forward, and with Shift back, whether or not the switcher is open", () => {
+  for (const shortcut of Object.keys(SHORTCUTS) as Shortcut[]) {
+    const { code, modifier } = SHORTCUTS[shortcut];
+    const mod = ({ Control: "ctrlKey", Alt: "altKey", Meta: "metaKey" } as const)[modifier];
+    for (const open of [false, true]) {
+      assert.equal(shortcutStep(shortcut, press(code, { [mod]: true }), open), 1, `${shortcut} open=${open}`);
+      assert.equal(shortcutStep(shortcut, press(code, { [mod]: true, shiftKey: true }), open), -1, `${shortcut} open=${open}`);
+    }
+    assert.equal(shortcutStep(shortcut, press(code), true), null, "no modifier");
+  }
+});
+
+test("with a Tab shortcut, the modifier and ` step back while the switcher is open, and Shift steps forward", () => {
+  assert.equal(shortcutStep("ctrl-tab", press("Backquote", { ctrlKey: true }), true), -1);
+  assert.equal(shortcutStep("ctrl-tab", press("Backquote", { ctrlKey: true, shiftKey: true }), true), 1);
+  assert.equal(shortcutStep("alt-tab", press("Backquote", { altKey: true }), true), -1);
+  assert.equal(shortcutStep("alt-tab", press("Backquote", { altKey: true, shiftKey: true }), true), 1);
+});
+
+test("the modifier and ` never open the switcher for a Tab shortcut, so Paseo keeps Ctrl+`", () => {
+  assert.equal(shortcutStep("ctrl-tab", press("Backquote", { ctrlKey: true }), false), null);
+  assert.equal(shortcutStep("ctrl-tab", press("Backquote", { ctrlKey: true, shiftKey: true }), false), null);
+  assert.equal(shortcutStep("alt-tab", press("Backquote", { altKey: true }), false), null);
+});
+
+test("` steps back only with the Tab shortcut's own modifier held alone", () => {
+  assert.equal(shortcutStep("ctrl-tab", press("Backquote"), true), null);
+  assert.equal(shortcutStep("ctrl-tab", press("Backquote", { altKey: true }), true), null);
+  assert.equal(shortcutStep("ctrl-tab", press("Backquote", { ctrlKey: true, metaKey: true }), true), null);
+  assert.equal(shortcutStep("alt-tab", press("Backquote", { ctrlKey: true }), true), null);
+  assert.equal(shortcutStep("ctrl-tab", press("Quote", { ctrlKey: true }), true), null);
+});
+
+test("the ` shortcuts are unchanged: ` is already their key", () => {
+  assert.equal(shortcutStep("cmd-backquote", press("Backquote", { metaKey: true }), true), 1);
+  assert.equal(shortcutStep("ctrl-backquote", press("Backquote", { ctrlKey: true }), true), 1);
+  assert.equal(shortcutStep("cmd-backquote", press("Tab", { metaKey: true }), true), null);
+});
+
+test("the hint names ` as the back key for Tab shortcuts, and Shift with the key otherwise", () => {
+  assert.deepEqual(backKeys("ctrl-tab"), ["`"]);
+  assert.deepEqual(backKeys("alt-tab"), ["`"]);
+  assert.deepEqual(backKeys("cmd-backquote"), ["Shift", "`"]);
+  assert.deepEqual(backKeys("ctrl-backquote"), ["Shift", "`"]);
 });
 
 test("extra modifiers and bare keys never match", () => {

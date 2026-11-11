@@ -109,6 +109,8 @@ import {
   matchesShortcut,
   matchRanges,
   MAX_LIMIT,
+  shortcutStep,
+  backKeys,
   DEFAULT_LIMIT,
   initialIndex,
   nextArmed,
@@ -2156,7 +2158,7 @@ function createSwitcher(installs: Installation[]): Switcher {
         keys(["Esc"], "clear");
       } else if (mode === "hold") {
         keys([SHORTCUTS[shortcut].modifierLabel], "release to open");
-        keys(["Shift", SHORTCUTS[shortcut].keyLabel], "back");
+        keys(backKeys(shortcut), "back");
         keys(["←"], "workspaces");
         removeKey();
         keys(["Esc"], "cancel");
@@ -2184,7 +2186,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       keys(["Esc"], "clear");
     } else if (mode === "hold") {
       keys([SHORTCUTS[shortcut].modifierLabel], "release to switch");
-      keys(["Shift", SHORTCUTS[shortcut].keyLabel], "back");
+      keys(backKeys(shortcut), "back");
       chats();
       rowKeys();
       keys(["Esc"], "cancel");
@@ -2552,10 +2554,11 @@ function createSwitcher(installs: Installation[]): Switcher {
   function onKeyDown(e: any) {
     if (e.isComposing) return;
     const key = keys.realKey(e);
-    if (matchesShortcut(shortcut, { code: keys.realCode(e), ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey })) {
+    const step = shortcutStep(shortcut, { code: keys.realCode(e), ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, shiftKey: e.shiftKey }, open);
+    if (step) {
       stop(e);
-      if (open) move(e.shiftKey ? -1 : 1);
-      else begin("hold", e.shiftKey ? -1 : 1);
+      if (open) move(step);
+      else begin("hold", step);
       return;
     }
     if (!open) return;

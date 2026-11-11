@@ -342,7 +342,7 @@ It appears only once there is a query: a 48px `solid` bar with a bottom rule, a 
 
 A `solid` pill under the sheet that lists only the keys that work right now:
 
-- Holding: Ctrl "release to switch", Shift Tab "back", → "sessions", ⌫ "archive", ⇧⌫ "hide", Esc "cancel", then muted "Type to filter". When only plugin screens are listed, the pair is a single ⌫ "hide".
+- Holding: Ctrl "release to switch", ` "back" (Shift ` with the ` shortcuts; Shift Tab still works with the Tab ones), → "sessions", ⌫ "archive", ⇧⌫ "hide", Esc "cancel", then muted "Type to filter". When only plugin screens are listed, the pair is a single ⌫ "hide".
 - Opened from the Command Center: Enter "switch", arrows "move", → "sessions", ⌫ "archive", ⇧⌫ "hide", Esc "close", "Type to filter".
 - Filtering: Enter "switch", arrows "move", → "sessions", Esc "clear".
 - No match: Backspace "edit", Esc "clear".

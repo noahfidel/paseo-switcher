@@ -46,7 +46,7 @@ export function makeSettings(switcher: Switcher): ComponentType<PluginSurfacePro
           />
           <SettingsSelect
             label="Shortcut"
-            hint="Hold the modifier and tap the key to open and step through workspaces; Shift goes back and releasing the modifier switches. Pick one your system does not already use."
+            hint="Hold the modifier and tap the key to open and step through workspaces; Shift goes back (with Tab, so does `) and releasing the modifier switches. Pick one your system does not already use."
             value={shortcut}
             options={SHORTCUT_OPTIONS}
             onValueChange={(value) => {

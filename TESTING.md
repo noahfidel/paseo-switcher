@@ -4,7 +4,7 @@ Two layers:
 
 | Command | What it covers | Needs |
 | --- | --- | --- |
-| `npm run verify` | Typecheck (client, and the daemon side with Node types) and unit tests: ordering and icons (`test/model.test.ts`, `test/icons.test.ts`, `test/screen-icons.test.ts`), a workspace's sessions (chats and terminals) and the keys (`test/chats.test.ts`), live status while the switcher is open: fresh load on show, polling, no overlap, no redraw when nothing changed (`test/live-status.test.ts`), redraws that keep every node still showing the same thing, so a poll never flashes rows, reloads icons or restarts spinners, in the list, the strip and a workspace's sessions (`test/no-flash.test.ts` and `test/morph.test.ts`, on a small DOM in `test/mini-dom.ts`), the repo icon lookup against temporary repos with a fake fetch, and the RPC contracts (`test/repo-icons.test.ts`), several hosts: one key handler however many hosts run the plugin, each host read through its own API (terminals too), opening a terminal by route, two-press archiving and closing, and visits from plugin screens and paseo-bots chat opens (`test/hosts.test.ts`, a fake page) | Nothing |
+| `npm run verify` | Typecheck (client, and the daemon side with Node types) and unit tests: ordering, the shortcut keys (with ` stepping back under a Tab shortcut only while open) and icons (`test/model.test.ts`, `test/icons.test.ts`, `test/screen-icons.test.ts`), a workspace's sessions (chats and terminals) and the keys (`test/chats.test.ts`), live status while the switcher is open: fresh load on show, polling, no overlap, no redraw when nothing changed (`test/live-status.test.ts`), redraws that keep every node still showing the same thing, so a poll never flashes rows, reloads icons or restarts spinners, in the list, the strip and a workspace's sessions (`test/no-flash.test.ts` and `test/morph.test.ts`, on a small DOM in `test/mini-dom.ts`), the repo icon lookup against temporary repos with a fake fetch, and the RPC contracts (`test/repo-icons.test.ts`), several hosts: one key handler however many hosts run the plugin, each host read through its own API (terminals too), opening a terminal by route, two-press archiving and closing, and visits from plugin screens and paseo-bots chat opens (`test/hosts.test.ts`, a fake page) | Nothing |
 | `npm run e2e` | Behavior and performance in Paseo's real web UI, against your local daemon (`test/e2e/run.mjs`) | A running daemon with this plugin installed |
 
 Run `npm run e2e -- --reload` before a release. It also reloads the plugin with `paseo plugin reload paseo-switcher` and checks that it cleans up after itself. Add `--headed` to watch the browser if you have a display.
@@ -25,7 +25,7 @@ The suite serves the web UI bundled with your installed Paseo CLI on `http://127
 
 3. **Port 8787 must be free.** Stop any other server on it first.
 
-4. **You need at least 7 workspaces** in the sidebar. The suite opens some of them and switches between them. It never sends messages, edits drafts, or changes workspaces. It does reset this plugin's own history and limit in the test browser, which is separate from your desktop app.
+4. **You need at least 7 workspaces** in the sidebar. The suite opens some of them and switches between them. It never sends messages, edits drafts, or changes workspaces. It does reset this plugin's own history and limit, and sets its shortcut to Ctrl+Tab, in the test browser, which is separate from your desktop app.
 
 ### Against an isolated daemon
 
@@ -63,6 +63,9 @@ The run takes about four minutes. It prints a PASS/FAIL line per check, writes `
 | B17–B21 | Command Center entry: Enter or a click switches; hover selects; clicking the backdrop closes |
 | B22 | Ctrl+Tab in the message box switches and types nothing into it |
 | B23 | Switching works with the sidebar collapsed |
+| B24 | With the Ctrl+Tab shortcut, Ctrl+` steps back while the switcher is open and Ctrl+Shift+` steps forward |
+| B25 | While the switcher is open, Ctrl+` never reaches Paseo's listeners |
+| B26 | With the switcher closed, Ctrl+` does not open it and reaches Paseo's listeners with its real key and code (Paseo's Toggle Explorer sidebar; the suite presses it again to put the sidebar back) |
 
 **Type to filter (F)**
 
