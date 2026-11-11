@@ -216,6 +216,50 @@ async function behavior(page, visited) {
   check("B16", "Losing window focus cancels", !s.open);
 }
 
+/** With Ctrl+Tab chosen, Ctrl+` steps back while the switcher is open and is left to Paseo (Toggle Explorer sidebar) while it is closed. */
+async function backquote(page) {
+  // Records the Ctrl+` presses that reach a window listener added after the switcher's and Paseo's.
+  await page.evaluate(() => {
+    window.__pwsBackquote = [];
+    window.addEventListener("keydown", (e) => {
+      if (e.ctrlKey && e.key !== "Control") window.__pwsBackquote.push({ key: e.key, code: e.code });
+    }, true);
+  });
+  const seen = () => page.evaluate(() => window.__pwsBackquote.splice(0));
+
+  await holdOpen(page, 2);
+  let s = await strip(page);
+  const start = s.selected;
+  await page.keyboard.press("Backquote");
+  const back = (await strip(page)).selected;
+  await page.keyboard.down("Shift");
+  await page.keyboard.press("Backquote");
+  await page.keyboard.up("Shift");
+  const forward = (await strip(page)).selected;
+  const leaked = await seen();
+  await page.keyboard.press("Escape");
+  await page.keyboard.up("Control");
+  check("B24", "Ctrl+` steps back while open and Ctrl+Shift+` steps forward", start === 2 && back === 1 && forward === 2, { start, back, forward });
+  check("B25", "While open, Ctrl+` never reaches Paseo", leaked.every((k) => k.key === "Unidentified" && k.code === ""), leaked);
+
+  await page.waitForTimeout(500);
+  const at = await cur(page);
+  const shown = await shownCount(page);
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Backquote");
+  await page.waitForTimeout(SHOW_DELAY_MS + 250);
+  s = await strip(page);
+  await page.keyboard.up("Control");
+  await page.waitForTimeout(800);
+  const passed = await seen();
+  // Paseo's own Explorer binding toggles the sidebar; press again to put it back.
+  await page.keyboard.press("Control+Backquote");
+  await page.waitForTimeout(500);
+  await seen();
+  const intact = passed.length === 1 && passed[0].key === "`" && passed[0].code === "Backquote";
+  check("B26", "With the switcher closed, Ctrl+` does not open it and reaches Paseo unchanged", !s.open && (await shownCount(page)) === shown && (await cur(page)) === at && intact, { open: s.open, passed });
+}
+
 async function typeToFilter(page) {
   const start = await cur(page);
   await holdOpen(page);
@@ -851,6 +895,8 @@ async function main() {
       localStorage.setItem("paseo-switcher:count-messages", "false");
       // Most suites cover the thumbnail strip; the list suite checks the default itself.
       localStorage.setItem("paseo-switcher:layout", '"strip"');
+      // Every suite drives the switcher with Ctrl+Tab, which is not the default shortcut.
+      localStorage.setItem("paseo-switcher:shortcut", '"ctrl-tab"');
     });
     await boot(page);
     const all = await rows(page);
@@ -860,6 +906,7 @@ async function main() {
     await warmUp(page, visited);
 
     await behavior(page, visited);
+    await backquote(page);
     await typeToFilter(page);
     await commandCenterAndMouse(page);
     await composer(page);
