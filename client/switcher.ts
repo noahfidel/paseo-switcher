@@ -696,6 +696,15 @@ function createSwitcher(installs: Installation[]): Switcher {
     }
   }
 
+  /** The label of a screen's own sidebar row (never another screen's), for when it has no title yet. */
+  function ownRowLabel(pluginId: string, screenId: string): string | null {
+    try {
+      return ariaLabelOf(doc.querySelector(screenRowSelector(pluginId, screenId)));
+    } catch {
+      return null;
+    }
+  }
+
   /** A sidebar row's label (its aria-label), trimmed; null when empty. */
   function ariaLabelOf(row: Node | null): string | null {
     return row?.getAttribute("aria-label")?.trim() || null;
@@ -724,7 +733,7 @@ function createSwitcher(installs: Installation[]): Switcher {
       title: Boolean(titleNode),
       badge: titleNode ? screenIconSvg(titleNode) : null,
     });
-    const title = shown ?? screens[key]?.title ?? ariaLabelOf(row) ?? screenTitle(null, route.pluginId);
+    const title = shown ?? screens[key]?.title ?? ownRowLabel(route.pluginId, route.screenId) ?? screenTitle(null, route.pluginId);
     const next = recordScreen(screens, key, { title, search: route.search, ...icon });
     if (next === screens) return;
     screens = next;
@@ -2750,7 +2759,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     getHidden: () =>
       hiddenKeys.map((key) => {
         const screen = parsePluginScreenKey(key);
-        if (screen) return { key, title: screens[key]?.title ?? ariaLabelOf(screenRow(screen.pluginId, screen.screenId)) ?? screenTitle(null, screen.pluginId), subtitle: `Plugin · ${prettifyPluginId(screen.pluginId)}` };
+        if (screen) return { key, title: screens[key]?.title ?? ownRowLabel(screen.pluginId, screen.screenId) ?? screenTitle(null, screen.pluginId), subtitle: `Plugin · ${prettifyPluginId(screen.pluginId)}` };
         const info = workspaceInfo(key) ?? knownNames[key];
         return { key, title: info?.name ?? "Workspace", subtitle: info?.project ?? "" };
       }),
