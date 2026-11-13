@@ -253,6 +253,7 @@ const REFRESH_MS = 2000;
  * rendering the workspace you just opened. It also lets that workspace finish loading.
  */
 const QUIET_AFTER_SWITCH_MS = 2000;
+/** While the switcher is closed, the workspace lists are refreshed in idle time when older than this, so the pinned group is current at open. */
 const WORKSPACES_STALE_MS = 5000;
 /** Opening the switcher reuses a list younger than this, so a quick tap-tap asks the hosts once. */
 const OPEN_FRESH_MS = 500;
@@ -2705,6 +2706,12 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (!open && !doc.hidden && Date.now() >= quietUntil) rememberFocusedAgent();
     if (layout === "strip" && dirty && !doc.hidden && Date.now() >= quietUntil) {
       whenIdle(() => win.requestAnimationFrame(() => setTimeout(snapshotIfDirty, 0)));
+    }
+    if (!open && !doc.hidden && Date.now() >= quietUntil) {
+      const now = Date.now();
+      if (knownHosts().some((h) => now - (hostData.get(h)?.workspacesAt ?? 0) > WORKSPACES_STALE_MS)) {
+        whenIdle(() => loadWorkspaces(WORKSPACES_STALE_MS));
+      }
     }
     // A message sent from a screen that isn't a workspace page (a bot chat, say) is only seen
     // through the agent list, so keep it fresh while the switcher is closed.

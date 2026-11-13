@@ -356,3 +356,47 @@ test("a pinned workspace that is answered while open stays pinned until it close
     cleanGlobals();
   }
 });
+
+// The pin set comes from cached lists, so they are kept fresh in idle time while the switcher is closed.
+/** Advances in small steps: the fake clock's Date only moves between ticks, so the refresh timer must see it move. */
+const stepsOf = (advance: (ms: number) => Promise<void>) => async (ms: number) => {
+  for (let spent = 0; spent < ms; spent += 1000) await advance(1000);
+};
+
+test("a workspace that needs input while closed is pinned on the first open", async (t) => {
+  const { state, switcher, page, advance } = await setup(t);
+  const steps = stepsOf(advance);
+  try {
+    await advance(3000);
+    state.third = "needs_input";
+    await steps(8000);
+    switcher.open();
+    await advance(1);
+    page.press({ key: "Enter", code: "Enter" });
+    await advance(50);
+    assert.match(page.pushed.at(-1) ?? "", /wks_3/);
+  } finally {
+    switcher.dispose();
+    t.mock.timers.reset();
+    cleanGlobals();
+  }
+});
+
+test("the closed switcher does not reload workspaces while the page is hidden", async (t) => {
+  const { state, switcher, page, advance } = await setup(t);
+  const steps = stepsOf(advance);
+  try {
+    await advance(3000);
+    page.document.hidden = true;
+    const w = state.workspaceCalls;
+    await steps(20_000);
+    assert.equal(state.workspaceCalls, w);
+    page.document.hidden = false;
+    await steps(8000);
+    assert.ok(state.workspaceCalls > w, "resumes once visible");
+  } finally {
+    switcher.dispose();
+    t.mock.timers.reset();
+    cleanGlobals();
+  }
+});
