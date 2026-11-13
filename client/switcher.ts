@@ -32,6 +32,7 @@ import {
   workspaceTitle,
   type SidebarDisplay,
   buildCards,
+  needsInputKeys,
   carriedLists,
   loadedWorkspaces,
   parseKnownNames,
@@ -1439,6 +1440,9 @@ function createSwitcher(installs: Installation[]): Switcher {
 
   // ---- open, move, commit ------------------------------------------------------------------------
 
+  /** Workspaces waiting on the user, pinned to the top; fixed by `begin` while the switcher is open. */
+  let pinned: string[] = [];
+
   function begin(nextMode: Mode, direction: 1 | -1) {
     watchChatOpens();
     syncRoute();
@@ -1448,7 +1452,9 @@ function createSwitcher(installs: Installation[]): Switcher {
     open = true;
     query = "";
     drill = null;
-    cards = buildCards(mru, loadedWorkspaces(hostData), limit, includeScreens ? screens : null, hiddenKeys);
+    // Fixed for as long as the switcher stays open, so nothing moves under the cursor.
+    pinned = needsInputKeys(mru, loadedWorkspaces(hostData), currentStopKey(), hiddenKeys);
+    cards = buildCards(mru, loadedWorkspaces(hostData), limit, includeScreens ? screens : null, hiddenKeys, pinned);
     index = direction === 1 ? initialIndex(cards, currentStopKey()) : wrap(-1, cards.length);
     clearTimeout(showTimer);
     // A quick tap flips to the previous workspace without drawing anything.
@@ -1497,7 +1503,7 @@ function createSwitcher(installs: Installation[]): Switcher {
 
   function refreshCards() {
     if (!query) {
-      cards = buildCards(mru, loadedWorkspaces(hostData), limit, includeScreens ? screens : null, hiddenKeys);
+      cards = buildCards(mru, loadedWorkspaces(hostData), limit, includeScreens ? screens : null, hiddenKeys, pinned);
       return;
     }
     const all = filterCards(query, mru, loadedWorkspaces(hostData), Infinity, display);
@@ -1511,6 +1517,7 @@ function createSwitcher(installs: Installation[]): Switcher {
     if (next === hiddenKeys) return;
     holdEnds();
     hiddenKeys = next;
+    pinned = pinned.filter((k) => k !== key);
     writeJson(HIDDEN_KEY, hiddenKeys);
     mru = visibleKeys(recentKeys(visits), includeScreens, hiddenKeys);
     // A hidden screen on show stops counting as a visit from here on.
@@ -1812,6 +1819,7 @@ function createSwitcher(installs: Installation[]): Switcher {
 
   function close() {
     open = false;
+    pinned = [];
     stopLivePoll();
     query = "";
     drill = null;

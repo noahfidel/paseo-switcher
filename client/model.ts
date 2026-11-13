@@ -725,17 +725,51 @@ export function parseCountMessages(value: unknown): boolean {
  */
 export type HostWorkspaces = ReadonlyMap<string, ReadonlyMap<string, WorkspaceInfo>>;
 
+/**
+ * Workspaces waiting on the user (a pending permission or question), to pin at the top of the list:
+ * visit order first, the rest by latest activity. The workspace the user is in and hidden ones are left out.
+ */
+export function needsInputKeys(
+  mru: readonly string[],
+  hosts: HostWorkspaces | null,
+  currentKey: string | null,
+  hidden: readonly string[] = [],
+): string[] {
+  if (!hosts) return [];
+  const waiting = new Map<string, WorkspaceInfo>();
+  for (const [serverId, workspaces] of hosts) {
+    for (const info of workspaces.values()) {
+      const key = workspaceKey(serverId, info.id);
+      if (info.status === "needs_input" && key !== currentKey && !hidden.includes(key)) waiting.set(key, info);
+    }
+  }
+  const visited = mru.filter((key) => waiting.has(key));
+  const rest = [...waiting.keys()].filter((key) => !visited.includes(key));
+  rest.sort((a, b) => (waiting.get(b)?.activityAt ?? 0) - (waiting.get(a)?.activityAt ?? 0));
+  return [...visited, ...rest];
+}
+
 export function buildCards(
   mru: readonly string[],
   hosts: HostWorkspaces | null,
   limit: number,
   screens?: Screens | null,
   hidden: readonly string[] = [],
+  pinned: readonly string[] = [],
 ): Card[] {
   const cards: Card[] = [];
   const seen = new Set<string>();
+  for (const key of pinned) {
+    if (cards.length >= limit) return cards;
+    const parts = splitKey(key);
+    const info = hosts?.get(parts.serverId)?.get(parts.workspaceId) ?? null;
+    if (!info) continue;
+    cards.push({ key, ...parts, info });
+    seen.add(key);
+  }
   for (const key of mru) {
     if (cards.length >= limit) return cards;
+    if (seen.has(key)) continue;
     if (isPluginScreenKey(key)) {
       const card = screens ? screenCard(key, screens[key]) : null;
       if (card) cards.push(card);

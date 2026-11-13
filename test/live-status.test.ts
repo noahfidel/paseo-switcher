@@ -41,6 +41,7 @@ function fakePage(pathname: string) {
   const listeners = new Map<string, Set<unknown>>();
   const store = new Map<string, string>();
   const created: any[] = [];
+  const pushed: string[] = [];
   const make = () => {
     const node = element();
     created.push(node);
@@ -51,7 +52,7 @@ function fakePage(pathname: string) {
     location: { pathname, search: "" },
     localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) },
     matchMedia: () => ({ matches: false }),
-    history: { state: null, pushState() {} },
+    history: { state: null, pushState: (_s: unknown, _t: string, path: string) => void pushed.push(path) },
     innerWidth: 1200,
     innerHeight: 800,
     requestAnimationFrame: (f: () => void) => setTimeout(f, 0),
@@ -81,6 +82,7 @@ function fakePage(pathname: string) {
     },
     texts: () => created.map((n) => n.textContent).filter((t): t is string => typeof t === "string"),
     drawn: () => created.length,
+    pushed,
   };
 }
 
@@ -95,7 +97,7 @@ const flush = async () => {
 
 /** A host with two workspaces and one chat whose statuses a test can change; each list is counted and can be held. */
 function liveApi() {
-  const state = { workspace: "done", chat: "idle", workspaceCalls: 0, agentCalls: 0, hold: null as null | Promise<void> };
+  const state = { workspace: "done", third: "done", chat: "idle", workspaceCalls: 0, agentCalls: 0, hold: null as null | Promise<void> };
   const api: any = {
     terminals: { list: async () => ({ entries: [], requestId: "r" }) },
     workspaces: {
@@ -106,6 +108,7 @@ function liveApi() {
           entries: [
             { id: "wks_1", name: "current", projectDisplayName: "proj", status: "done", activityAt: "2026-11-01T00:00:00Z" },
             { id: "wks_2", name: "other", projectDisplayName: "proj", status: state.workspace, activityAt: "2026-11-01T00:00:00Z" },
+            { id: "wks_3", name: "third", projectDisplayName: "proj", status: state.third, activityAt: "2026-10-01T00:00:00Z" },
           ],
           pageInfo: { hasMore: false },
         };
@@ -296,6 +299,57 @@ test("a slow load is never overlapped by another request", async (t) => {
     await flush();
     await advance(1500);
     assert.equal(state.workspaceCalls, 2, "polling goes on once the slow load lands");
+  } finally {
+    switcher.dispose();
+    t.mock.timers.reset();
+    cleanGlobals();
+  }
+});
+
+// The pinned group is fixed when the switcher opens: nothing moves under the cursor while it is open.
+test("a workspace that starts needing input while open does not move; the next open pins it", async (t) => {
+  const { state, switcher, page, advance } = await setup(t);
+  try {
+    switcher.open();
+    await advance(1);
+    state.third = "needs_input";
+    await advance(1600);
+    assert.ok(page.texts().some((x) => x.startsWith("Needs input")), "its row shows the live status");
+    page.press({ key: "Enter", code: "Enter" });
+    await advance(50);
+    assert.match(page.pushed.at(-1) ?? "", /wks_2/, "the cursor stayed on the previous workspace");
+    switcher.open();
+    await advance(1);
+    page.press({ key: "Enter", code: "Enter" });
+    await advance(50);
+    assert.match(page.pushed.at(-1) ?? "", /wks_3/, "reopened, the waiting workspace is first and selected");
+  } finally {
+    switcher.dispose();
+    t.mock.timers.reset();
+    cleanGlobals();
+  }
+});
+
+test("a pinned workspace that is answered while open stays pinned until it closes", async (t) => {
+  const { state, switcher, page, advance } = await setup(t);
+  try {
+    state.third = "needs_input";
+    switcher.open();
+    await advance(1600);
+    page.press({ key: "Escape", code: "Escape" });
+    await advance(100);
+    switcher.open(); // the list loaded by the last open is what this one pins from
+    await advance(1);
+    state.third = "done";
+    await advance(1600);
+    page.press({ key: "Enter", code: "Enter" });
+    await advance(50);
+    assert.match(page.pushed.at(-1) ?? "", /wks_3/, "still first and selected");
+    switcher.open();
+    await advance(1);
+    page.press({ key: "Enter", code: "Enter" });
+    await advance(50);
+    assert.match(page.pushed.at(-1) ?? "", /wks_2/, "back in its normal place after reopening");
   } finally {
     switcher.dispose();
     t.mock.timers.reset();

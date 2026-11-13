@@ -63,6 +63,6 @@ request data; the end-to-end suite's timings. Registry installs: 2 at the time o
 ## Product Principles
 
 1. Never slower than not having it.
-2. Recency first: the order never reshuffles by status, so muscle memory holds.
+2. Recency first: the order never reshuffles by status while the switcher is open, so muscle memory holds. The one exception is fixed at open: workspaces waiting on your input are pinned to the top.
 3. Say what Paseo says: the same status words and colours as the sidebar.
 4. Keys are the interface; the mouse and touch work but are never required.

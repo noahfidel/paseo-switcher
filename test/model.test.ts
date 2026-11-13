@@ -13,6 +13,7 @@ import {
   workspaceTitle,
   type SidebarDisplay,
   buildCards,
+  needsInputKeys,
   parseAgentMemory,
   pickFocusedAgent,
   rememberAgent,
@@ -80,12 +81,12 @@ import {
 } from "../client/model.ts";
 
 const S = "srv_a";
-const info = (id: string, activityAt: number): WorkspaceInfo => ({
+const info = (id: string, activityAt: number, status = "done"): WorkspaceInfo => ({
   id,
   name: id,
   project: "p",
   branch: null,
-  status: "done",
+  status,
   additions: 0,
   deletions: 0,
   activityAt,
@@ -1222,4 +1223,56 @@ test("the names of visited workspaces are remembered per host, and only while th
   assert.equal(rememberNames(names, visits, hosts), names, "unchanged names keep the same object");
   assert.deepEqual(parseKnownNames({ [`${S}:a`]: { name: "Alpha", project: "web" }, bad: { name: 3 }, also: "x" }), { [`${S}:a`]: { name: "Alpha", project: "web" } });
   assert.deepEqual(parseKnownNames("nope"), {});
+});
+
+test("workspaces needing input come first in visit order, then the usual list without repeats", () => {
+  const mru = ["a", "b", "c", "d"].map((id) => `${S}:${id}`);
+  const hosts = one(list(info("a", 4), info("b", 3, "needs_input"), info("c", 2), info("d", 1, "needs_input")));
+  const pinned = needsInputKeys(mru, hosts, `${S}:a`);
+  assert.deepEqual(pinned, [`${S}:b`, `${S}:d`]);
+  assert.deepEqual(buildCards(mru, hosts, 5, null, [], pinned).map((c) => c.workspaceId), ["b", "d", "a", "c"]);
+});
+
+test("pinned rows count toward the limit and are pulled in from outside the recent rows", () => {
+  const mru = ["a", "b", "c"].map((id) => `${S}:${id}`);
+  const hosts = one(list(info("a", 5), info("b", 4), info("c", 3), info("z", 0, "needs_input")));
+  const pinned = needsInputKeys(mru, hosts, `${S}:a`);
+  assert.deepEqual(pinned, [`${S}:z`]);
+  assert.deepEqual(buildCards(mru, hosts, 3, null, [], pinned).map((c) => c.workspaceId), ["z", "a", "b"]);
+});
+
+test("more pinned than the limit shows only the first ones, those not visited ordered by activity", () => {
+  const mru = [`${S}:p2`];
+  const hosts = one(list(info("p1", 1, "needs_input"), info("p2", 0, "needs_input"), info("p3", 9, "needs_input"), info("p4", 5, "needs_input")));
+  const pinned = needsInputKeys(mru, hosts, null);
+  assert.deepEqual(pinned, [`${S}:p2`, `${S}:p3`, `${S}:p4`, `${S}:p1`]);
+  assert.deepEqual(buildCards(mru, hosts, 2, null, [], pinned).map((c) => c.workspaceId), ["p2", "p3"]);
+});
+
+test("the current and hidden workspaces are never pinned", () => {
+  const mru = [`${S}:a`, `${S}:b`];
+  const hosts = one(list(info("a", 2, "needs_input"), info("b", 1, "needs_input"), info("c", 0, "needs_input")));
+  assert.deepEqual(needsInputKeys(mru, hosts, `${S}:a`, [`${S}:c`]), [`${S}:b`]);
+  assert.deepEqual(needsInputKeys(mru, null, null), []);
+});
+
+test("once nothing needs input the order is the plain visit order again", () => {
+  const mru = ["a", "b", "c"].map((id) => `${S}:${id}`);
+  const hosts = one(list(info("a", 3), info("b", 2), info("c", 1)));
+  const pinned = needsInputKeys(mru, hosts, `${S}:a`);
+  assert.deepEqual(pinned, []);
+  assert.deepEqual(buildCards(mru, hosts, 5, null, [], pinned).map((c) => c.workspaceId), ["a", "b", "c"]);
+});
+
+test("a pinned key that is gone from its loaded host is skipped", () => {
+  const hosts = one(list(info("a", 1)));
+  assert.deepEqual(buildCards([`${S}:a`], hosts, 5, null, [], [`${S}:gone`]).map((c) => c.workspaceId), ["a"]);
+});
+
+test("the cursor starts on the first pinned row", () => {
+  const mru = [`${S}:a`, `${S}:b`, `${S}:c`];
+  const hosts = one(list(info("a", 3), info("b", 2), info("c", 1, "needs_input")));
+  const cards = buildCards(mru, hosts, 5, null, [], needsInputKeys(mru, hosts, `${S}:a`));
+  assert.deepEqual(cards.map((c) => c.workspaceId), ["c", "a", "b"]);
+  assert.equal(initialIndex(cards, `${S}:a`), 0);
 });

@@ -5,7 +5,7 @@
 [![Paseo](https://img.shields.io/badge/Paseo-0.15-8A63D2?style=for-the-badge)](https://paseo.sh)
 [![License](https://img.shields.io/github/license/tomgrin10/paseo-switcher?style=for-the-badge&color=2563eb)](LICENSE)
 
-Arc-style workspace switching for Paseo, on Cmd+` by default (Ctrl+Tab, Option+Tab and Ctrl+` are in Settings). Hold Cmd and tap ` to step through your most recently used workspaces, release Cmd to switch. On macOS, first turn off "Move focus to next window" (System Settings → Keyboard → Keyboard Shortcuts → Keyboard), which otherwise keeps Cmd+` for itself. A quick tap flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number.
+Arc-style workspace switching for Paseo, on Cmd+` by default (Ctrl+Tab, Option+Tab and Ctrl+` are in Settings). Hold Cmd and tap ` to step through your most recently used workspaces, release Cmd to switch. On macOS, first turn off "Move focus to next window" (System Settings → Keyboard → Keyboard Shortcuts → Keyboard), which otherwise keeps Cmd+` for itself. A quick tap flips straight back to the previous workspace without drawing anything. Start typing while it is open to find any workspace by name, project, branch or pull request number. Workspaces waiting on your input (a pending permission or question) are pinned to the top when the switcher opens, in visit order, and return to their normal place once answered; the list does not reorder while it is open, and the workspace you are in is never pinned.
 
 ![Holding Ctrl+Tab to browse recent workspaces, releasing to switch, a quick tap back, then typing "search" to find a workspace](docs/media/switcher.gif)
 
